@@ -82,6 +82,9 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .img-n{display:block;max-width:100%;max-height:360px;border-radius:8px;margin:.5rem 0}
 .img-e{display:block;width:100%;max-height:200px;object-fit:cover;border-radius:6px;margin:.4rem 0}
 .prev{display:block;max-width:100%;max-height:160px;border-radius:6px;margin:.4rem 0}
+.acoes-n{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.7rem}
+.acoes-n .btn{padding:.4rem .85rem}
+.btn[aria-pressed=true]{border-color:var(--ouro);color:var(--ouro);font-weight:700}
 @media print{.topo,.btn,.filtros,.abas,.acoes{display:none!important}}
 </style>
 </head>
@@ -202,6 +205,7 @@ function msgErro(e) {
   if (/rate limit/i.test(m)) return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
   if (e && e.code === '23503') return 'Este registro está em uso em outra tela e não pode ser excluído.';
   if (/row-level security|permission denied/i.test(m)) return 'Você não tem permissão para esta ação.';
+  if (e && e.code === '23505') return 'Você já curtiu esta notícia.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
   return m;
@@ -236,21 +240,71 @@ function confirmar(msg, rotulo) {
 
 /* ---------- Telas públicas ---------- */
 
+async function minhasCurtidas() {
+  if (!sessao) return new Set();
+  const {data} = await sb.from('curtidas').select('noticia_id');
+  return new Set((data || []).map(x => x.noticia_id));
+}
+
+function cartaoNoticia(x, curtidas, solo) {
+  const c = curtidas.has(x.id), t = solo ? 'h1' : 'h3';
+  const tit = solo ? esc(x.titulo) : `<a href="#/noticia/${x.id}" style="color:inherit;text-decoration:none">${esc(x.titulo)}</a>`;
+  return `<article class="noticia"><${t}>${tit}</${t}><time>${dataBR(x.criado_em)}</time>${imgTag(x.imagem_path, 'img-n')}<p>${texto(x.texto)}</p>
+    <div class="acoes-n"><button class="btn sec" data-acao="curtir" data-id="${x.id}" aria-pressed="${c}"><span class="ic" aria-hidden="true">${c ? '♥' : '♡'}</span> Gostei · <span class="n">${x.curtidas || 0}</span></button><button class="btn sec" data-acao="compartilhar" data-id="${x.id}" data-titulo="${esc(x.titulo)}">Compartilhar</button></div></article>`;
+}
+
+async function alternarCurtida(b) {
+  if (!sessao) { aviso('Entre na sua conta para curtir.', true); return; }
+  if (!perfil || perfil.papel === 'pendente') { aviso('Seu cadastro ainda aguarda a aprovação do administrador.', true); return; }
+  if (b.disabled) return;
+  b.disabled = true;
+  const id = Number(b.dataset.id), curtido = b.getAttribute('aria-pressed') === 'true';
+  const r = curtido
+    ? await sb.from('curtidas').delete().eq('noticia_id', id).eq('usuario_id', sessao.user.id)
+    : await sb.from('curtidas').insert({noticia_id: id, usuario_id: sessao.user.id});
+  b.disabled = false;
+  if (r.error) { aviso(msgErro(r.error), true); return; }
+  const n = b.querySelector('.n');
+  n.textContent = Math.max(0, Number(n.textContent) + (curtido ? -1 : 1));
+  b.setAttribute('aria-pressed', String(!curtido));
+  b.querySelector('.ic').textContent = curtido ? '♡' : '♥';
+}
+
+async function compartilhar(id, titulo) {
+  const url = location.origin + location.pathname + '#/noticia/' + id;
+  if (navigator.share) {
+    try { await navigator.share({title: titulo, text: titulo + ' · ' + CONFIG.nome, url}); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(url); aviso('Link copiado.'); }
+  catch (e) { window.prompt('Copie o link:', url); }
+}
+
+async function viewNoticia(id) {
+  app.innerHTML = '<p class="vazio">Carregando…</p>';
+  const [n, curtidas] = await Promise.all([sb.from('noticias').select('*').eq('id', id).maybeSingle(), minhasCurtidas()]);
+  if (n.error) { app.innerHTML = `<p class="erro">${esc(msgErro(n.error))}</p>`; return; }
+  if (!n.data) { app.innerHTML = '<h1>Notícia não encontrada</h1><p>Ela pode ter sido removida.</p><p><a href="#/">Voltar ao início</a></p>'; return; }
+  document.title = n.data.titulo + ' · ' + CONFIG.nome;
+  app.innerHTML = `<p><a href="#/">← Todas as notícias</a></p>${cartaoNoticia(n.data, curtidas, true)}`;
+}
+
 function hero() {
   return `<section class="hero"><img class="logo-g" src="${$('#logoTopo').src}" alt="Logotipo do terreiro"><div><h1>${esc(CONFIG.nome)}</h1><p>Notícias, avisos e agenda do terreiro.</p></div></section>`;
 }
 
 async function viewInicio() {
   app.innerHTML = `${hero()}<p class="vazio">Carregando…</p>`;
-  const [n, e] = await Promise.all([
+  const [n, e, curtidas] = await Promise.all([
     sb.from('noticias').select('*').eq('publicada', true).order('criado_em', {ascending:false}).limit(20),
-    sb.from('eventos').select('*').gte('data_hora', new Date().toISOString()).order('data_hora').limit(5)
+    sb.from('eventos').select('*').gte('data_hora', new Date().toISOString()).order('data_hora').limit(5),
+    minhasCurtidas()
   ]);
   const pend = perfil && perfil.papel === 'pendente'
     ? '<div class="aviso-pend">Seu cadastro foi recebido e aguarda a aprovação do administrador para liberar a área de membros.</div>' : '';
   const noticias = n.error ? `<p class="erro">${esc(msgErro(n.error))}</p>`
     : !n.data.length ? '<p class="vazio">Nenhuma notícia publicada ainda.</p>'
-    : n.data.map(x => `<article class="noticia"><h3>${esc(x.titulo)}</h3><time>${dataBR(x.criado_em)}</time>${imgTag(x.imagem_path, 'img-n')}<p>${texto(x.texto)}</p></article>`).join('');
+    : n.data.map(x => cartaoNoticia(x, curtidas)).join('');
   const eventos = e.error ? `<p class="erro">${esc(msgErro(e.error))}</p>`
     : !e.data.length ? '<p class="vazio">Nenhum evento agendado.</p>'
     : e.data.map(blocoEvento).join('');
@@ -338,7 +392,8 @@ const CFG = {
       {r:'Título', fmt:r => r.titulo},
       {r:'Criada em', fmt:r => dataHoraBR(r.criado_em)},
       {r:'Situação', fmt:r => r.publicada ? 'Publicada' : 'Rascunho', cls:r => r.publicada ? 'ok' : 'rasc'},
-      {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''}
+      {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''},
+      {r:'Curtidas', num:true, fmt:r => String(r.curtidas || 0)}
     ],
     campos:[
       {k:'titulo', r:'Título', tipo:'text', req:true},
@@ -603,7 +658,9 @@ async function rotear() {
     const ah = a.getAttribute('href').replace(/^#\/?/, '');
     a.toggleAttribute('aria-current', ah === h || (adm && ah.startsWith('admin')));
   });
-  const f = ROTAS[h];
+  const mNot = h.match(/^noticia\/(\d+)$/);
+  const f = mNot ? () => viewNoticia(Number(mNot[1])) : ROTAS[h];
+  document.title = CONFIG.nome;
   if (!f) { location.hash = '#/'; return; }
   if (h === 'entrar' && sessao) { location.hash = '#/'; return; }
   if (adm && !exigirAdmin()) return;
@@ -618,6 +675,11 @@ async function iniciar() {
   const ic = document.createElement('link'); ic.rel = 'icon'; ic.href = $('#logoTopo').src; document.head.appendChild(ic);
   $('#menuBtn').onclick = () => { const a = nav.classList.toggle('aberto'); $('#menuBtn').setAttribute('aria-expanded', String(a)); };
   window.addEventListener('hashchange', rotear);
+  app.addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-acao]'); if (!b) return;
+    if (b.dataset.acao === 'curtir') alternarCurtida(b);
+    else if (b.dataset.acao === 'compartilhar') compartilhar(Number(b.dataset.id), b.dataset.titulo);
+  });
   try {
     const {data} = await sb.auth.getSession();
     sessao = data.session;
