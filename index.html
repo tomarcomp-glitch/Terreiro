@@ -85,7 +85,7 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 </head>
 <body>
 <header class="topo">
-  <a class="marca" href="#/" id="marca"></a>
+  <a class="marca" href="#/" id="marca">Terreiro Pai Jacó</a>
   <button class="btn sec menu-btn" id="menuBtn" aria-expanded="false" aria-controls="nav">Menu</button>
   <nav id="nav" aria-label="Principal"></nav>
 </header>
@@ -95,7 +95,20 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 <div id="aviso" role="status" aria-live="polite"></div>
 <noscript><p style="padding:1rem">Este site precisa de JavaScript ativado.</p></noscript>
 
+<script>
+(function () {
+  function mostrar(msg) {
+    var a = document.getElementById('app'); if (!a) return;
+    a.innerHTML = '<div class="cartao estreito"><h1>Não foi possível carregar</h1><p></p><button class="btn" onclick="location.reload()">Recarregar</button></div>';
+    a.querySelector('p').textContent = msg;
+  }
+  window.addEventListener('error', function (e) { if (!window.__ok) mostrar('Erro: ' + (e.message || 'desconhecido')); });
+  window.addEventListener('unhandledrejection', function (e) { if (!window.__ok) mostrar('Erro: ' + ((e.reason && e.reason.message) || e.reason)); });
+  setTimeout(function () { if (!window.__ok) mostrar('O site demorou para responder. Verifique a internet e recarregue a página.'); }, 12000);
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
 <script>
 const CONFIG = {
   nome: 'Terreiro Pai Jacó',
@@ -103,6 +116,7 @@ const CONFIG = {
   chave: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmeXlqYnJuYmhocmRseWZyeG1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NTA0MDMsImV4cCI6MjEwODAyNjQwM30._dXqWTzkSDmVroTBTLtNpk09YRdj_wHozjfosmI2h2c'
 };
 
+if (!window.supabase) { throw new Error('Não foi possível carregar o componente de banco de dados (rede bloqueada ou sem internet).'); }
 const sb = supabase.createClient(CONFIG.url, CONFIG.chave);
 const $ = s => document.querySelector(s);
 const app = $('#app');
@@ -326,4 +340,294 @@ const CFG = {
       {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'noticias'},
       {k:'publicada', r:'Publicar no portal', tipo:'checkbox'}
     ],
-    extraNovo:() => ({autor: sessao
+    extraNovo:() => ({autor: sessao.user.id})
+  },
+  eventos: {
+    aba:'#/admin/eventos', tabela:'eventos', titulo:'Eventos', singular:'evento', botao:'Novo evento',
+    vazio:'Nenhum evento ainda. Cadastre a próxima gira ou festa.',
+    ordem:['data_hora', false], busca:['titulo','descricao','local'], nome:r => r.titulo,
+    colunas:[
+      {r:'Data e hora', fmt:r => dataHoraBR(r.data_hora)},
+      {r:'Evento', fmt:r => r.titulo},
+      {r:'Local', fmt:r => r.local || ''},
+      {r:'Aberto ao público', fmt:r => r.publico ? 'Sim' : 'Só membros'},
+      {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''}
+    ],
+    campos:[
+      {k:'titulo', r:'Título', tipo:'text', req:true},
+      {k:'data_hora', r:'Data e hora', tipo:'datetime', req:true},
+      {k:'local', r:'Local', tipo:'text'},
+      {k:'descricao', r:'Descrição', tipo:'textarea'},
+      {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'eventos'},
+      {k:'publico', r:'Aberto ao público (desmarque para só membros)', tipo:'checkbox', padrao:true}
+    ]
+  },
+  membros: {
+    aba:'#/admin/membros', tabela:'membros', titulo:'Membros', singular:'membro', botao:'Novo membro',
+    vazio:'Nenhum membro cadastrado. Cadastre o primeiro.',
+    ordem:['nome', true], busca:['nome','telefone','observacoes'], nome:r => r.nome,
+    colunas:[
+      {r:'Nome', fmt:r => r.nome},
+      {r:'Telefone', fmt:r => r.telefone || ''},
+      {r:'Nascimento', fmt:r => dataBR(r.nascimento)},
+      {r:'Entrada', fmt:r => dataBR(r.data_entrada)},
+      {r:'Observações', fmt:r => (r.observacoes || '').slice(0, 60)}
+    ],
+    campos:[
+      {k:'nome', r:'Nome', tipo:'text', req:true},
+      {k:'telefone', r:'Telefone', tipo:'text'},
+      {k:'nascimento', r:'Data de nascimento', tipo:'date'},
+      {k:'data_entrada', r:'Data de entrada', tipo:'date'},
+      {k:'observacoes', r:'Observações', tipo:'textarea'}
+    ]
+  },
+  lancamentos: {
+    aba:'#/admin/financeiro', tabela:'lancamentos', titulo:'Financeiro', singular:'lançamento', botao:'Novo lançamento',
+    vazio:'Nenhum lançamento ainda. Registre a primeira receita ou despesa.',
+    ordem:['data', false], busca:['descricao','categoria'], nome:r => r.descricao, filtroMes:'data',
+    antes: async () => {
+      const {data} = await sb.from('membros').select('id,nome');
+      const m = {}; (data || []).forEach(x => { m[x.id] = x.nome; }); return m;
+    },
+    colunas:[
+      {r:'Data', fmt:r => dataBR(r.data)},
+      {r:'Tipo', fmt:r => r.tipo === 'receita' ? 'Receita' : 'Despesa', cls:r => r.tipo === 'receita' ? 'rec' : 'des'},
+      {r:'Descrição', fmt:r => r.descricao},
+      {r:'Categoria', fmt:r => r.categoria || ''},
+      {r:'Membro', fmt:(r, c) => c[r.membro_id] || ''},
+      {r:'Valor', num:true, fmt:r => (r.tipo === 'despesa' ? '− ' : '') + brl(r.valor), cls:r => r.tipo === 'receita' ? 'rec' : 'des'}
+    ],
+    campos:[
+      {k:'tipo', r:'Tipo', tipo:'select', req:true, opcoes:[{v:'receita', t:'Receita'}, {v:'despesa', t:'Despesa'}]},
+      {k:'descricao', r:'Descrição', tipo:'text', req:true},
+      {k:'valor', r:'Valor (R$)', tipo:'number', req:true, min:0.01},
+      {k:'data', r:'Data', tipo:'date', req:true, padrao:hoje},
+      {k:'categoria', r:'Categoria (ex.: mensalidade, doação, material)', tipo:'text'},
+      {k:'membro_id', r:'Membro (opcional)', tipo:'select', int:true,
+        opcoes: async () => { const {data} = await sb.from('membros').select('id,nome').order('nome'); return (data || []).map(x => ({v:x.id, t:x.nome})); }}
+    ],
+    resumo: rs => {
+      let rec = 0, des = 0;
+      rs.forEach(x => { const c = Math.round(Number(x.valor) * 100); if (x.tipo === 'receita') rec += c; else des += c; });
+      return `<div class="totais"><div><span>Receitas</span><strong class="ok">${brl(rec / 100)}</strong></div><div><span>Despesas</span><strong class="neg">${brl(des / 100)}</strong></div><div><span>Saldo</span><strong class="${rec >= des ? 'ok' : 'neg'}">${brl((rec - des) / 100)}</strong></div></div>`;
+    }
+  },
+  estoque: {
+    aba:'#/admin/estoque', tabela:'estoque', titulo:'Estoque', singular:'item', botao:'Novo item',
+    vazio:'Nenhum item no estoque. Cadastre o primeiro material.',
+    ordem:['item', true], busca:['item'], nome:r => r.item,
+    destaque: r => Number(r.minimo) > 0 && Number(r.quantidade) <= Number(r.minimo),
+    colunas:[
+      {r:'Item', fmt:r => r.item},
+      {r:'Quantidade', num:true, fmt:r => `${r.quantidade ?? 0} ${r.unidade || ''}`.trim()},
+      {r:'Mínimo', num:true, fmt:r => String(r.minimo ?? 0)},
+      {r:'Situação', fmt:r => (Number(r.minimo) > 0 && Number(r.quantidade) <= Number(r.minimo)) ? 'Repor' : 'Ok', cls:() => 'sit'}
+    ],
+    campos:[
+      {k:'item', r:'Item', tipo:'text', req:true},
+      {k:'quantidade', r:'Quantidade em estoque', tipo:'number', padrao:0, min:0},
+      {k:'unidade', r:'Unidade (ex.: un, kg, maço)', tipo:'text'},
+      {k:'minimo', r:'Quantidade mínima (avisa para repor)', tipo:'number', padrao:0, min:0}
+    ]
+  }
+};
+
+async function abrirForm(cfg, row, aoSalvar) {
+  const novo = !row, r = row || {};
+  const ops = {};
+  for (const c of cfg.campos) if (c.tipo === 'select') ops[c.k] = typeof c.opcoes === 'function' ? await c.opcoes() : c.opcoes;
+  const campo = c => {
+    const pad = typeof c.padrao === 'function' ? c.padrao() : c.padrao;
+    const v = novo ? pad : r[c.k];
+    const id = 'f_' + c.k;
+    if (c.tipo === 'checkbox') return `<label class="chk"><input type="checkbox" id="${id}"${v ? ' checked' : ''}>${esc(c.r)}</label>`;
+    if (c.tipo === 'imagem') {
+      const atual = r[c.k] ? `<img class="prev" src="${esc(imgUrl(r[c.k]))}" alt="Imagem atual">` : '';
+      const apaga = c.pasta === 'eventos' ? 'o evento termina ou é excluído' : 'a notícia é excluída';
+      return `<label for="${id}">${esc(c.r)}</label>${atual}<input id="${id}" type="file" accept="image/*">${r[c.k] ? `<label class="chk"><input type="checkbox" id="${id}_rm">Remover a imagem atual</label>` : ''}<p class="suave">A imagem é reduzida automaticamente e apagada quando ${apaga}.</p>`;
+    }
+    const rot = `<label for="${id}">${esc(c.r)}${c.req ? ' *' : ''}</label>`;
+    if (c.tipo === 'textarea') return `${rot}<textarea id="${id}">${esc(v ?? '')}</textarea>`;
+    if (c.tipo === 'select') return `${rot}<select id="${id}">${c.req ? '' : '<option value=""></option>'}${ops[c.k].map(o => `<option value="${esc(o.v)}"${String(o.v) === String(v ?? '') ? ' selected' : ''}>${esc(o.t)}</option>`).join('')}</select>`;
+    const tipo = c.tipo === 'datetime' ? 'datetime-local' : c.tipo;
+    const val = c.tipo === 'datetime' ? paraLocal(v) : (v ?? '');
+    const extra = c.tipo === 'number' ? ' step="any" inputmode="decimal"' + (c.min !== undefined ? ` min="${c.min}"` : '') : '';
+    return `${rot}<input id="${id}" type="${tipo}" value="${esc(val)}"${extra}>`;
+  };
+  const d = $('#dlg');
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${novo ? esc(cfg.botao) : 'Editar ' + esc(cfg.singular)}</h2>${cfg.campos.map(campo).join('')}<p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar ${esc(cfg.singular)}</button></div></form>`;
+  d.showModal();
+  const primeiro = d.querySelector('input,textarea,select'); if (primeiro) primeiro.focus();
+  $('#cancelar').onclick = () => d.close();
+  const erro = t => { $('#erroF').textContent = t; };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const obj = {};
+    let arquivo = null;
+    for (const c of cfg.campos) {
+      const el = $('#f_' + c.k);
+      if (c.tipo === 'imagem') {
+        const rm = $('#f_' + c.k + '_rm');
+        if (el.files && el.files[0]) arquivo = el.files[0];
+        else if (rm && rm.checked) obj[c.k] = null;
+        continue;
+      }
+      if (c.tipo === 'checkbox') { obj[c.k] = el.checked; continue; }
+      let v = el.value.trim();
+      if (!v) {
+        if (c.req) { erro(`Preencha o campo "${c.r}".`); el.focus(); return; }
+        obj[c.k] = null; continue;
+      }
+      if (c.tipo === 'number') {
+        v = Number(v);
+        if (isNaN(v) || (c.min !== undefined && v < c.min)) { erro(`Valor inválido em "${c.r}".`); el.focus(); return; }
+      } else if (c.tipo === 'datetime') {
+        v = new Date(v).toISOString();
+      } else if (c.int) {
+        v = Number(v);
+      }
+      obj[c.k] = v;
+    }
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const ci = cfg.campos.find(c => c.tipo === 'imagem');
+    let enviada = null, antiga = null;
+    if (ci && arquivo) {
+      try { enviada = await enviarImagem(arquivo, ci.pasta); }
+      catch (e) { erro(msgErro(e)); btn.disabled = false; return; }
+      obj[ci.k] = enviada;
+    }
+    if (ci && !novo && r[ci.k] && (enviada || obj[ci.k] === null)) antiga = r[ci.k];
+    const res = novo
+      ? await sb.from(cfg.tabela).insert({...obj, ...(cfg.extraNovo ? cfg.extraNovo() : {})}).select()
+      : await sb.from(cfg.tabela).update(obj).eq('id', r.id).select();
+    if (res.error || !res.data || !res.data.length) {
+      if (enviada) await apagarImagens([enviada]);
+      erro(res.error ? msgErro(res.error) : 'Não foi possível salvar. Verifique se você ainda está logado como administrador.');
+      btn.disabled = false; return;
+    }
+    if (antiga) await apagarImagens([antiga]);
+    d.close(); aviso('Salvo.'); aoSalvar();
+  };
+}
+
+async function viewCrud(cfg) {
+  const mesPad = hoje().slice(0, 7);
+  app.innerHTML = abas(cfg.aba) + `<div class="cab"><h1>${esc(cfg.titulo)}</h1><button class="btn" id="novo">${esc(cfg.botao)}</button></div>
+    <div class="filtros"><input id="busca" type="search" placeholder="Buscar" aria-label="Buscar">${cfg.filtroMes ? `<input id="mes" type="month" value="${mesPad}" aria-label="Filtrar por mês" style="max-width:190px">` : ''}</div>
+    <div id="resumo"></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  let linhas = [], ctx = {};
+  const filtradas = () => {
+    const q = norm($('#busca').value), mes = cfg.filtroMes ? $('#mes').value : '';
+    return linhas.filter(r => (!q || cfg.busca.some(k => norm(r[k]).includes(q))) && (!mes || String(r[cfg.filtroMes]).startsWith(mes)));
+  };
+  const desenhar = () => {
+    const rs = filtradas();
+    if (cfg.resumo) $('#resumo').innerHTML = cfg.resumo(rs);
+    if (!linhas.length) { $('#lista').innerHTML = `<p class="vazio">${esc(cfg.vazio)}</p>`; return; }
+    if (!rs.length) { $('#lista').innerHTML = '<p class="vazio">Nada encontrado com esse filtro.</p>'; return; }
+    $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr>${cfg.colunas.map(c => `<th class="${c.num ? 'num' : ''}">${esc(c.r)}</th>`).join('')}<th></th></tr></thead><tbody>`
+      + rs.map(r => `<tr class="${cfg.destaque && cfg.destaque(r) ? 'alerta' : ''}">`
+        + cfg.colunas.map(c => `<td class="${c.num ? 'num ' : ''}${c.cls ? c.cls(r, ctx) : ''}">${esc(c.fmt(r, ctx))}</td>`).join('')
+        + `<td class="acoes"><button class="btn sec peq" data-a="e" data-id="${r.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${r.id}">Excluir</button></td></tr>`).join('')
+      + '</tbody></table></div>';
+  };
+  const carregar = async () => {
+    if (cfg.antes) ctx = await cfg.antes();
+    const {data, error} = await sb.from(cfg.tabela).select('*').order(cfg.ordem[0], {ascending:cfg.ordem[1]});
+    if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+    linhas = data; desenhar();
+  };
+  $('#novo').onclick = () => abrirForm(cfg, null, carregar);
+  $('#busca').oninput = desenhar;
+  if (cfg.filtroMes) $('#mes').oninput = desenhar;
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
+    if (b.dataset.a === 'e') { abrirForm(cfg, row, carregar); return; }
+    if (!(await confirmar(`Excluir "${cfg.nome(row)}"? Esta ação não pode ser desfeita.`, 'Excluir ' + cfg.singular))) return;
+    const {data, error} = await sb.from(cfg.tabela).delete().eq('id', row.id).select();
+    if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
+    if (row.imagem_path && !(await apagarImagens([row.imagem_path]))) aviso('Excluído, mas a imagem não pôde ser apagada do armazenamento.', true);
+    else aviso('Excluído.');
+    carregar();
+  };
+  carregar();
+}
+
+async function viewUsuarios() {
+  app.innerHTML = abas('#/admin/usuarios') + `<div class="cab"><h1>Usuários</h1></div>
+    <p class="suave">Quem se cadastra no site entra como "Aguardando". Aprove como Membro para liberar os eventos internos. O papel Administrador dá acesso total ao painel.</p>
+    <div id="lista"><p class="vazio">Carregando…</p></div>`;
+  const {data, error} = await sb.from('profiles').select('*').order('criado_em', {ascending:false});
+  if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+  const rot = {pendente:'Aguardando', membro:'Membro', admin:'Administrador'};
+  $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Nome</th><th>Cadastro em</th><th>Papel</th></tr></thead><tbody>`
+    + data.map(u => `<tr><td>${esc(u.nome || '(sem nome)')}</td><td>${dataBR(u.criado_em)}</td><td>${u.id === sessao.user.id
+      ? 'Você (' + rot[u.papel] + ')'
+      : `<select data-id="${u.id}" data-nome="${esc(u.nome || '')}" aria-label="Papel de ${esc(u.nome || 'usuário')}">${Object.keys(rot).map(k => `<option value="${k}"${k === u.papel ? ' selected' : ''}>${rot[k]}</option>`).join('')}</select>`}</td></tr>`).join('')
+    + '</tbody></table></div>';
+  $('#lista').onchange = async ev => {
+    const s = ev.target.closest('select[data-id]'); if (!s) return;
+    const original = data.find(u => u.id === s.dataset.id).papel;
+    if (s.value === 'admin' && !(await confirmar(`Tornar "${s.dataset.nome}" administrador? Essa pessoa poderá ver e alterar tudo, inclusive o financeiro.`, 'Tornar administrador'))) { s.value = original; return; }
+    const res = await sb.from('profiles').update({papel: s.value}).eq('id', s.dataset.id).select();
+    if (res.error || !res.data || !res.data.length) { aviso(res.error ? msgErro(res.error) : 'Não foi possível alterar.', true); s.value = original; return; }
+    data.find(u => u.id === s.dataset.id).papel = s.value;
+    aviso('Papel atualizado.');
+  };
+}
+
+/* ---------- Rotas e início ---------- */
+
+const ROTAS = {
+  '': viewInicio, 'agenda': viewAgenda, 'entrar': viewEntrar,
+  'admin/noticias': () => viewCrud(CFG.noticias),
+  'admin/eventos': () => viewCrud(CFG.eventos),
+  'admin/membros': () => viewCrud(CFG.membros),
+  'admin/financeiro': () => viewCrud(CFG.lancamentos),
+  'admin/estoque': () => viewCrud(CFG.estoque),
+  'admin/usuarios': viewUsuarios
+};
+
+async function rotear() {
+  const h = (location.hash || '#/').replace(/^#\/?/, '');
+  nav.classList.remove('aberto'); $('#menuBtn').setAttribute('aria-expanded', 'false');
+  const adm = h.startsWith('admin');
+  document.querySelectorAll('#nav a').forEach(a => {
+    const ah = a.getAttribute('href').replace(/^#\/?/, '');
+    a.toggleAttribute('aria-current', ah === h || (adm && ah.startsWith('admin')));
+  });
+  const f = ROTAS[h];
+  if (!f) { location.hash = '#/'; return; }
+  if (h === 'entrar' && sessao) { location.hash = '#/'; return; }
+  if (adm && !exigirAdmin()) return;
+  if (perfil && perfil.papel === 'admin') limparEventosEncerrados();
+  await f();
+  window.scrollTo(0, 0);
+}
+
+async function iniciar() {
+  document.title = CONFIG.nome;
+  $('#marca').textContent = CONFIG.nome;
+  $('#menuBtn').onclick = () => { const a = nav.classList.toggle('aberto'); $('#menuBtn').setAttribute('aria-expanded', String(a)); };
+  window.addEventListener('hashchange', rotear);
+  try {
+    const {data} = await sb.auth.getSession();
+    sessao = data.session;
+    await carregarPerfil();
+  } catch (e) { sessao = null; perfil = null; }
+  desenharNav();
+  await rotear();
+  window.__ok = true;
+  sb.auth.onAuthStateChange((ev, s) => {
+    if (ev === 'INITIAL_SESSION' || ev === 'TOKEN_REFRESHED') { if (s) sessao = s; return; }
+    const mesmo = (s && s.user && sessao && sessao.user && s.user.id === sessao.user.id);
+    sessao = s;
+    if (mesmo) return;
+    setTimeout(async () => { await carregarPerfil(); desenharNav(); rotear(); }, 0);
+  });
+}
+iniciar();
+</script>
+</body>
+</html>
