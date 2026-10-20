@@ -85,6 +85,15 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .acoes-n{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.7rem}
 .acoes-n .btn{padding:.4rem .85rem}
 .btn[aria-pressed=true]{border-color:var(--ouro);color:var(--ouro);font-weight:700}
+.presenca{margin-top:.6rem;padding:.6rem .7rem;border:1px solid var(--linha);border-radius:8px;background:var(--fundo)}
+.presenca .pr-linha{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.presenca .pr-motivo{margin-top:.4rem}
+.presenca .pr-motivo input{margin-bottom:.4rem}
+.presenca .pr-msg{margin:.4rem 0 0;font-size:.9rem}
+.pr-pend{color:var(--perigo);font-weight:600}
+.alerta-pres{background:var(--papel);border:1px solid var(--perigo);border-left-width:5px;border-radius:6px;padding:.7rem 1rem;margin-bottom:1rem}
+.lista-pres h3{font-size:1rem;margin:.9rem 0 .2rem}
+.lista-pres ul{margin:0;padding-left:1.1rem}
 @media print{.topo,.btn,.filtros,.abas,.acoes{display:none!important}}
 </style>
 </head>
@@ -205,6 +214,7 @@ function msgErro(e) {
   if (/rate limit/i.test(m)) return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
   if (e && e.code === '23503') return 'Este registro está em uso em outra tela e não pode ser excluído.';
   if (/row-level security|permission denied/i.test(m)) return 'Você não tem permissão para esta ação.';
+  if (e && e.code === '23514') return 'Informe o motivo de não ir.';
   if (e && e.code === '23505') return 'Você já curtiu esta notícia.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
@@ -295,10 +305,11 @@ function hero() {
 
 async function viewInicio() {
   app.innerHTML = `${hero()}<p class="vazio">Carregando…</p>`;
-  const [n, e, curtidas] = await Promise.all([
+  const [n, e, curtidas, presencas] = await Promise.all([
     sb.from('noticias').select('*').eq('publicada', true).order('criado_em', {ascending:false}).limit(20),
     sb.from('eventos').select('*').gte('data_hora', new Date().toISOString()).order('data_hora').limit(5),
-    minhasCurtidas()
+    minhasCurtidas(),
+    minhasPresencas()
   ]);
   const pend = perfil && perfil.papel === 'pendente'
     ? '<div class="aviso-pend">Seu cadastro foi recebido e aguarda a aprovação do administrador para liberar a área de membros.</div>' : '';
@@ -307,23 +318,104 @@ async function viewInicio() {
     : n.data.map(x => cartaoNoticia(x, curtidas)).join('');
   const eventos = e.error ? `<p class="erro">${esc(msgErro(e.error))}</p>`
     : !e.data.length ? '<p class="vazio">Nenhum evento agendado.</p>'
-    : e.data.map(blocoEvento).join('');
-  app.innerHTML = `${hero()}${pend}
+    : e.data.map(x => blocoEvento(x, presencas)).join('');
+  app.innerHTML = `${hero()}<div id="alertaPres"></div>${pend}
     <div class="duas"><section><h2>Notícias</h2>${noticias}</section><aside><h2>Próximos eventos</h2>${eventos}<p><a href="#/agenda">Ver agenda completa</a></p></aside></div>`;
+  preencherAlerta();
 }
 
-function blocoEvento(x) {
+async function minhasPresencas() {
+  if (!sessao) return new Map();
+  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('usuario_id', sessao.user.id);
+  return new Map((data || []).map(x => [x.evento_id, x]));
+}
+
+const msgPresenca = r => !r ? 'Você ainda não respondeu.' : r.vai ? 'Presença confirmada.' : 'Registrado: você não irá.';
+
+function widgetPresenca(x, resp) {
+  if (!x.pede_presenca || !sessao || !perfil || perfil.papel === 'pendente' || !resp) return '';
+  const r = resp.get(x.id);
+  return `<div class="presenca"><div class="pr-linha"><strong>Sua presença:</strong>
+    <button class="btn sec peq" data-acao="irei" data-id="${x.id}" aria-pressed="${!!(r && r.vai)}">Irei</button>
+    <button class="btn sec peq" data-acao="naoirei" data-id="${x.id}" aria-pressed="${!!(r && !r.vai)}">Não irei</button></div>
+    <div class="pr-motivo"${r && !r.vai ? '' : ' hidden'}><label for="mot_${x.id}">Motivo (obrigatório)</label><input id="mot_${x.id}" maxlength="200" value="${esc(r && !r.vai ? r.motivo : '')}"><button class="btn peq" data-acao="salvar-motivo" data-id="${x.id}">Salvar motivo</button></div>
+    <p class="pr-msg ${r ? 'suave' : 'pr-pend'}">${msgPresenca(r)}</p></div>`;
+}
+
+async function salvarPresenca(id, vai, motivo, wrap) {
+  if (!sessao) return;
+  const botoes = wrap.querySelectorAll('button');
+  botoes.forEach(b => { b.disabled = true; });
+  const {error} = await sb.from('presencas').upsert(
+    {evento_id: id, usuario_id: sessao.user.id, vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
+    {onConflict: 'evento_id,usuario_id'});
+  botoes.forEach(b => { b.disabled = false; });
+  if (error) { aviso(msgErro(error), true); return; }
+  wrap.querySelector('[data-acao=irei]').setAttribute('aria-pressed', String(vai));
+  wrap.querySelector('[data-acao=naoirei]').setAttribute('aria-pressed', String(!vai));
+  wrap.querySelector('.pr-motivo').hidden = vai;
+  const m = wrap.querySelector('.pr-msg');
+  m.textContent = msgPresenca({vai, motivo}); m.className = 'pr-msg suave';
+  aviso('Resposta registrada.');
+}
+
+async function resumoPresencas() {
+  const [ev, pf, pr] = await Promise.all([
+    sb.from('eventos').select('id,titulo,data_hora').eq('pede_presenca', true).gte('data_hora', new Date().toISOString()).order('data_hora'),
+    sb.from('profiles').select('id,nome,papel'),
+    sb.from('presencas').select('evento_id,usuario_id,vai,motivo')
+  ]);
+  if (ev.error || pf.error || pr.error) return null;
+  const nomes = {}; pf.data.forEach(p => { nomes[p.id] = p.nome || '(sem nome)'; });
+  const membros = pf.data.filter(p => p.papel === 'membro');
+  const porEvento = {}, pendentes = new Set();
+  ev.data.forEach(e => {
+    const rs = pr.data.filter(x => x.evento_id === e.id), resp = {};
+    rs.forEach(x => { resp[x.usuario_id] = x; });
+    const sem = membros.filter(m => !resp[m.id]);
+    sem.forEach(m => pendentes.add(m.id));
+    porEvento[e.id] = {
+      irao: rs.filter(x => x.vai).map(x => nomes[x.usuario_id] || '(removido)'),
+      nao: rs.filter(x => !x.vai).map(x => ({nome: nomes[x.usuario_id] || '(removido)', motivo: x.motivo})),
+      sem: sem.map(m => m.nome || '(sem nome)')
+    };
+  });
+  return {porEvento, membrosPendentes: pendentes.size, eventosComPendencia: Object.values(porEvento).filter(x => x.sem.length).length};
+}
+
+async function preencherAlerta() {
+  if (!perfil || perfil.papel !== 'admin') return;
+  const r = await resumoPresencas();
+  const el = $('#alertaPres');
+  if (!el || !r || !r.eventosComPendencia) return;
+  el.innerHTML = `<div class="alerta-pres" role="alert"><strong>Presenças sem resposta:</strong> ${r.membrosPendentes} membro(s) ainda não decidiram em ${r.eventosComPendencia} evento(s). <a href="#/admin/eventos">Ver respostas</a></div>`;
+}
+
+function abrirRespostas(ev, x) {
+  const d = $('#dlg');
+  const lista = (arr, f) => arr.length ? `<ul>${arr.map(f).join('')}</ul>` : '<p class="suave">Ninguém.</p>';
+  d.innerHTML = `<h2 id="dlgT">Presenças: ${esc(ev.titulo)}</h2><div class="lista-pres">${!x ? '<p class="suave">Este evento não pede confirmação de presença ou já aconteceu.</p>' : `
+    <h3>Irão (${x.irao.length})</h3>${lista(x.irao, n => `<li>${esc(n)}</li>`)}
+    <h3>Não irão (${x.nao.length})</h3>${lista(x.nao, n => `<li>${esc(n.nome)} — ${esc(n.motivo)}</li>`)}
+    <h3 class="pr-pend">Sem resposta (${x.sem.length})</h3>${lista(x.sem, n => `<li>${esc(n)}</li>`)}`}</div>
+    <div class="rodape"><button class="btn" id="fechar" type="button">Fechar</button></div>`;
+  d.showModal();
+  $('#fechar').onclick = () => d.close();
+}
+
+function blocoEvento(x, resp) {
   const d = new Date(x.data_hora);
   const mes = d.toLocaleDateString('pt-BR', {month:'short'}).replace('.', '');
-  return `<div class="evento"><div class="dia"><b>${d.getDate()}</b>${esc(mes)}</div><div><strong>${esc(x.titulo)}</strong>${x.publico ? '' : ' <span class="suave">(só membros)</span>'}<br><span class="suave">${d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}${x.local ? ' · ' + esc(x.local) : ''}</span>${imgTag(x.imagem_path, 'img-e')}${x.descricao ? '<br>' + texto(x.descricao) : ''}</div></div>`;
+  return `<div class="evento"><div class="dia"><b>${d.getDate()}</b>${esc(mes)}</div><div><strong>${esc(x.titulo)}</strong>${x.publico ? '' : ' <span class="suave">(só membros)</span>'}<br><span class="suave">${d.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}${x.local ? ' · ' + esc(x.local) : ''}</span>${imgTag(x.imagem_path, 'img-e')}${x.descricao ? '<br>' + texto(x.descricao) : ''}${widgetPresenca(x, resp)}</div></div>`;
 }
 
 async function viewAgenda() {
   app.innerHTML = '<h1>Agenda</h1><p class="vazio">Carregando…</p>';
   const {data, error} = await sb.from('eventos').select('*').gte('data_hora', new Date().toISOString()).order('data_hora');
+  const presencas = await minhasPresencas();
   const corpo = error ? `<p class="erro">${esc(msgErro(error))}</p>`
     : !data.length ? '<p class="vazio">Nenhum evento agendado por enquanto.</p>'
-    : data.map(blocoEvento).join('');
+    : data.map(x => blocoEvento(x, presencas)).join('');
   const dica = sessao ? '' : '<p class="suave">Entre com sua conta de membro para ver também os eventos internos.</p>';
   app.innerHTML = `<h1>Agenda</h1>${dica}${corpo}`;
 }
@@ -406,13 +498,15 @@ const CFG = {
   eventos: {
     aba:'#/admin/eventos', tabela:'eventos', titulo:'Eventos', singular:'evento', botao:'Novo evento',
     vazio:'Nenhum evento ainda. Cadastre a próxima gira ou festa.',
-    ordem:['data_hora', false], busca:['titulo','descricao','local'], nome:r => r.titulo,
+    ordem:['data_hora', false], busca:['titulo','descricao','local'], nome:r => r.titulo, respostas:true,
+    antes: async () => { const x = await resumoPresencas(); return x ? x.porEvento : {}; },
     colunas:[
       {r:'Data e hora', fmt:r => dataHoraBR(r.data_hora)},
       {r:'Evento', fmt:r => r.titulo},
       {r:'Local', fmt:r => r.local || ''},
       {r:'Aberto ao público', fmt:r => r.publico ? 'Sim' : 'Só membros'},
-      {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''}
+      {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''},
+      {r:'Presenças', fmt:(r, c) => { const x = c[r.id]; return x ? `Irão ${x.irao.length} · Não ${x.nao.length} · Sem resposta ${x.sem.length}` : ''; }, cls:(r, c) => (c[r.id] && c[r.id].sem.length) ? 'des' : ''}
     ],
     campos:[
       {k:'titulo', r:'Título', tipo:'text', req:true},
@@ -420,7 +514,8 @@ const CFG = {
       {k:'local', r:'Local', tipo:'text'},
       {k:'descricao', r:'Descrição', tipo:'textarea'},
       {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'eventos'},
-      {k:'publico', r:'Aberto ao público (desmarque para só membros)', tipo:'checkbox', padrao:true}
+      {k:'publico', r:'Aberto ao público (desmarque para só membros)', tipo:'checkbox', padrao:true},
+      {k:'pede_presenca', r:'Pedir confirmação de presença dos membros', tipo:'checkbox', padrao:true}
     ]
   },
   membros: {
@@ -573,9 +668,10 @@ async function abrirForm(cfg, row, aoSalvar) {
 
 async function viewCrud(cfg) {
   const mesPad = hoje().slice(0, 7);
-  app.innerHTML = abas(cfg.aba) + `<div class="cab"><h1>${esc(cfg.titulo)}</h1><button class="btn" id="novo">${esc(cfg.botao)}</button></div>
+  app.innerHTML = abas(cfg.aba) + '<div id="alertaPres"></div>' + `<div class="cab"><h1>${esc(cfg.titulo)}</h1><button class="btn" id="novo">${esc(cfg.botao)}</button></div>
     <div class="filtros"><input id="busca" type="search" placeholder="Buscar" aria-label="Buscar">${cfg.filtroMes ? `<input id="mes" type="month" value="${mesPad}" aria-label="Filtrar por mês" style="max-width:190px">` : ''}</div>
     <div id="resumo"></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  preencherAlerta();
   let linhas = [], ctx = {};
   const filtradas = () => {
     const q = norm($('#busca').value), mes = cfg.filtroMes ? $('#mes').value : '';
@@ -589,7 +685,7 @@ async function viewCrud(cfg) {
     $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr>${cfg.colunas.map(c => `<th class="${c.num ? 'num' : ''}">${esc(c.r)}</th>`).join('')}<th></th></tr></thead><tbody>`
       + rs.map(r => `<tr class="${cfg.destaque && cfg.destaque(r) ? 'alerta' : ''}">`
         + cfg.colunas.map(c => `<td class="${c.num ? 'num ' : ''}${c.cls ? c.cls(r, ctx) : ''}">${esc(c.fmt(r, ctx))}</td>`).join('')
-        + `<td class="acoes"><button class="btn sec peq" data-a="e" data-id="${r.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${r.id}">Excluir</button></td></tr>`).join('')
+        + `<td class="acoes">${cfg.respostas ? `<button class="btn sec peq" data-a="r" data-id="${r.id}">Respostas</button> ` : ''}<button class="btn sec peq" data-a="e" data-id="${r.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${r.id}">Excluir</button></td></tr>`).join('')
       + '</tbody></table></div>';
   };
   const carregar = async () => {
@@ -604,6 +700,7 @@ async function viewCrud(cfg) {
   $('#lista').onclick = async ev => {
     const b = ev.target.closest('button[data-a]'); if (!b) return;
     const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
+    if (b.dataset.a === 'r') { abrirRespostas(row, ctx[row.id]); return; }
     if (b.dataset.a === 'e') { abrirForm(cfg, row, carregar); return; }
     if (!(await confirmar(`Excluir "${cfg.nome(row)}"? Esta ação não pode ser desfeita.`, 'Excluir ' + cfg.singular))) return;
     const {data, error} = await sb.from(cfg.tabela).delete().eq('id', row.id).select();
@@ -679,6 +776,13 @@ async function iniciar() {
     const b = ev.target.closest('button[data-acao]'); if (!b) return;
     if (b.dataset.acao === 'curtir') alternarCurtida(b);
     else if (b.dataset.acao === 'compartilhar') compartilhar(Number(b.dataset.id), b.dataset.titulo);
+    else if (b.dataset.acao === 'irei') salvarPresenca(Number(b.dataset.id), true, null, b.closest('.presenca'));
+    else if (b.dataset.acao === 'naoirei') { const w = b.closest('.presenca'); w.querySelector('.pr-motivo').hidden = false; w.querySelector('input').focus(); }
+    else if (b.dataset.acao === 'salvar-motivo') {
+      const w = b.closest('.presenca'), m = w.querySelector('input').value.trim();
+      if (!m) { aviso('Informe o motivo de não ir.', true); return; }
+      salvarPresenca(Number(b.dataset.id), false, m, w);
+    }
   });
   try {
     const {data} = await sb.auth.getSession();
