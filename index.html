@@ -94,6 +94,18 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .alerta-pres{background:var(--papel);border:1px solid var(--perigo);border-left-width:5px;border-radius:6px;padding:.7rem 1rem;margin-bottom:1rem}
 .lista-pres h3{font-size:1rem;margin:.9rem 0 .2rem}
 .lista-pres ul{margin:0;padding-left:1.1rem}
+.ajuda{background:var(--fundo);border-left:3px solid var(--ouro);padding:.5rem .7rem;margin:.4rem 0;font-size:.9rem;color:var(--suave);border-radius:4px}
+.sec-m{border:1px solid var(--linha);border-radius:8px;padding:.1rem .8rem .8rem;margin-top:.8rem}
+.sec-m h3{font-size:1rem;margin:.8rem 0 .2rem}
+label.op{align-items:flex-start;margin:.5rem 0}
+label.op input{margin-top:.3rem}
+label.op span{display:flex;flex-direction:column}
+label.op small{font-weight:400;color:var(--suave);line-height:1.35}
+.lista-m{list-style:none;margin:.6rem 0 0;padding:0}
+.lista-m li{padding:.6rem 0;border-bottom:1px solid var(--linha)}
+.lista-m .pr-linha{display:flex;gap:.4rem;margin-top:.3rem}
+.lista-m .pr-motivo{margin-top:.4rem;display:flex;gap:.4rem}
+.lista-m .pr-motivo[hidden]{display:none}
 @media print{.topo,.btn,.filtros,.abas,.acoes{display:none!important}}
 </style>
 </head>
@@ -132,6 +144,39 @@ const CONFIG = {
 
 if (!window.supabase) { throw new Error('Não foi possível carregar o componente de banco de dados (rede bloqueada ou sem internet).'); }
 const sb = supabase.createClient(CONFIG.url, CONFIG.chave);
+
+const TERMOS = {
+  aviso: 'Descrições gerais, para orientar o preenchimento. As funções e atribuições podem variar de casa para casa; peça ao dirigente para revisar estes textos.',
+  tipos: {
+    administrador: {r:'Administrador', d:'Colaborador que ajuda na gestão do terreiro. Recebe acesso completo ao painel do site (cadastros, financeiro, estoque e eventos).'},
+    medium: {r:'Médium', d:'Pessoa que integra a corrente mediúnica da casa e trabalha nas giras. Informe as funções, os cargos e o grau mediúnico.'},
+    consulente: {r:'Consulente', d:'Pessoa que procura o terreiro para atendimento e orientação espiritual, sem fazer parte da corrente de trabalho.'}
+  },
+  funcoes: {
+    colaborador: {r:'Colaborador', d:'Auxilia na organização e na administração da casa.'},
+    curimba: {r:'Curimba', d:'Corpo musical da gira: cantadores e tocadores de atabaque. Com os pontos cantados e tocados, harmoniza e sustenta a vibração dos trabalhos.'},
+    cambone: {r:'Cambone', d:'Auxiliar do médium incorporado: acompanha o atendimento, ajuda o consulente e cuida dos materiais e da organização durante a gira.'},
+    incorporante: {r:'Incorporante', d:'Médium que recebe (incorpora) as entidades espirituais, como Caboclos, Pretos-Velhos e Crianças, para trabalhar na caridade e atender os consulentes.'},
+    contribuinte: {r:'Contribuinte', d:'Consulente que colabora financeiramente com a manutenção da casa.'},
+    nao_contribuinte: {r:'Não contribuinte', d:'Consulente que frequenta ou é atendido sem compromisso de contribuição financeira.'}
+  },
+  cargos: {
+    lider_curimba: {r:'Líder da curimba', d:'Coordena a curimba: os cantadores e tocadores de atabaque.'},
+    lider_cambone: {r:'Líder dos cambones', d:'Coordena os cambones e orienta os auxiliares durante a gira.'},
+    lider_incorporante: {r:'Líder dos incorporantes', d:'Coordena os médiuns incorporantes e orienta o grupo.'},
+    chefe_areia: {r:'Chefe de areia', d:'Coordena a "areia", o espaço do salão onde acontece o trabalho mediúnico: ordem dos trabalhos, disposição dos médiuns e disciplina durante a gira.'},
+    mae_menor: {r:'Mãe menor', d:'Auxilia o(a) dirigente (pai ou mãe de santo) na condução da casa e dos médiuns, e o(a) representa quando necessário.'}
+  },
+  graus: {
+    1: {r:'1º grau — Coroado', d:'Médium coroado (iniciado), em fase inicial de desenvolvimento. É a primeira etapa dos graus de Coroado (1º, 2º e 3º).'},
+    2: {r:'2º grau — Coroado', d:'Segunda etapa do desenvolvimento do Coroado.'},
+    3: {r:'3º grau — Coroado', d:'Terceira etapa do Coroado, antes de assumir uma função na corrente.'},
+    4: {r:'4º grau — Função', d:'Etapa em que o médium assume uma função na corrente: Curimba, Incorporante ou Cambone. Marque a função escolhida em "Funções na corrente".'},
+    5: {r:'5º grau — Erveiro', d:'Responsável pelo conhecimento e pelo uso das ervas (banhos, defumações e preparos) nos trabalhos da casa.'},
+    6: {r:'6º grau — Egbome', d:'Médium experiente, com longa caminhada na casa, que orienta e auxilia na formação dos demais.'},
+    7: {r:'7º grau — Sacerdote', d:'Grau máximo: sacerdote apto a conduzir um terreiro (pai ou mãe de santo).'}
+  }
+};
 const $ = s => document.querySelector(s);
 const app = $('#app');
 const nav = $('#nav');
@@ -215,7 +260,7 @@ function msgErro(e) {
   if (e && e.code === '23503') return 'Este registro está em uso em outra tela e não pode ser excluído.';
   if (/row-level security|permission denied/i.test(m)) return 'Você não tem permissão para esta ação.';
   if (e && e.code === '23514') return 'Informe o motivo de não ir.';
-  if (e && e.code === '23505') return 'Você já curtiu esta notícia.';
+  if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
   return m;
@@ -226,6 +271,7 @@ async function carregarPerfil() {
   if (!sessao) return;
   const {data} = await sb.from('profiles').select('*').eq('id', sessao.user.id).maybeSingle();
   perfil = data;
+  if (perfil) { const m = await sb.rpc('meu_medium_id'); perfil.membro_id = m.error ? null : m.data; }
 }
 
 function desenharNav() {
@@ -325,15 +371,15 @@ async function viewInicio() {
 }
 
 async function minhasPresencas() {
-  if (!sessao) return new Map();
-  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('usuario_id', sessao.user.id);
+  if (!sessao || !perfil || !perfil.membro_id) return new Map();
+  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('membro_id', perfil.membro_id);
   return new Map((data || []).map(x => [x.evento_id, x]));
 }
 
 const msgPresenca = r => !r ? 'Você ainda não respondeu.' : r.vai ? 'Presença confirmada.' : 'Registrado: você não irá.';
 
 function widgetPresenca(x, resp) {
-  if (!x.pede_presenca || !sessao || !perfil || perfil.papel === 'pendente' || !resp) return '';
+  if (!x.pede_presenca || !sessao || !perfil || !perfil.membro_id || !resp) return '';
   const r = resp.get(x.id);
   return `<div class="presenca"><div class="pr-linha"><strong>Sua presença:</strong>
     <button class="btn sec peq" data-acao="irei" data-id="${x.id}" aria-pressed="${!!(r && r.vai)}">Irei</button>
@@ -343,12 +389,12 @@ function widgetPresenca(x, resp) {
 }
 
 async function salvarPresenca(id, vai, motivo, wrap) {
-  if (!sessao) return;
+  if (!sessao || !perfil || !perfil.membro_id) return;
   const botoes = wrap.querySelectorAll('button');
   botoes.forEach(b => { b.disabled = true; });
   const {error} = await sb.from('presencas').upsert(
-    {evento_id: id, usuario_id: sessao.user.id, vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
-    {onConflict: 'evento_id,usuario_id'});
+    {evento_id: id, membro_id: perfil.membro_id, vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
+    {onConflict: 'evento_id,membro_id'});
   botoes.forEach(b => { b.disabled = false; });
   if (error) { aviso(msgErro(error), true); return; }
   wrap.querySelector('[data-acao=irei]').setAttribute('aria-pressed', String(vai));
@@ -360,25 +406,20 @@ async function salvarPresenca(id, vai, motivo, wrap) {
 }
 
 async function resumoPresencas() {
-  const [ev, pf, pr] = await Promise.all([
+  const [ev, mm, pr] = await Promise.all([
     sb.from('eventos').select('id,titulo,data_hora').eq('pede_presenca', true).gte('data_hora', new Date().toISOString()).order('data_hora'),
-    sb.from('profiles').select('id,nome,papel'),
-    sb.from('presencas').select('evento_id,usuario_id,vai,motivo')
+    sb.from('membros').select('id,nome,usuario_id').eq('tipo', 'medium').order('nome'),
+    sb.from('presencas').select('evento_id,membro_id,vai,motivo')
   ]);
-  if (ev.error || pf.error || pr.error) return null;
-  const nomes = {}; pf.data.forEach(p => { nomes[p.id] = p.nome || '(sem nome)'; });
-  const membros = pf.data.filter(p => p.papel === 'membro');
+  if (ev.error || mm.error || pr.error) return null;
   const porEvento = {}, pendentes = new Set();
   ev.data.forEach(e => {
-    const rs = pr.data.filter(x => x.evento_id === e.id), resp = {};
-    rs.forEach(x => { resp[x.usuario_id] = x; });
-    const sem = membros.filter(m => !resp[m.id]);
-    sem.forEach(m => pendentes.add(m.id));
-    porEvento[e.id] = {
-      irao: rs.filter(x => x.vai).map(x => nomes[x.usuario_id] || '(removido)'),
-      nao: rs.filter(x => !x.vai).map(x => ({nome: nomes[x.usuario_id] || '(removido)', motivo: x.motivo})),
-      sem: sem.map(m => m.nome || '(sem nome)')
-    };
+    const resp = {};
+    pr.data.filter(x => x.evento_id === e.id).forEach(x => { resp[x.membro_id] = x; });
+    const linhas = mm.data.map(m => ({id: m.id, nome: m.nome, semConta: !m.usuario_id, vai: resp[m.id] ? resp[m.id].vai : null, motivo: resp[m.id] ? resp[m.id].motivo : null}));
+    const sem = linhas.filter(l => l.vai === null);
+    sem.forEach(l => pendentes.add(l.id));
+    porEvento[e.id] = {linhas, irao: linhas.filter(l => l.vai === true), nao: linhas.filter(l => l.vai === false), sem};
   });
   return {porEvento, membrosPendentes: pendentes.size, eventosComPendencia: Object.values(porEvento).filter(x => x.sem.length).length};
 }
@@ -391,16 +432,39 @@ async function preencherAlerta() {
   el.innerHTML = `<div class="alerta-pres" role="alert"><strong>Presenças sem resposta:</strong> ${r.membrosPendentes} membro(s) ainda não decidiram em ${r.eventosComPendencia} evento(s). <a href="#/admin/eventos">Ver respostas</a></div>`;
 }
 
-function abrirRespostas(ev, x) {
+async function abrirRespostas(ev, aoMudar) {
   const d = $('#dlg');
-  const lista = (arr, f) => arr.length ? `<ul>${arr.map(f).join('')}</ul>` : '<p class="suave">Ninguém.</p>';
-  d.innerHTML = `<h2 id="dlgT">Presenças: ${esc(ev.titulo)}</h2><div class="lista-pres">${!x ? '<p class="suave">Este evento não pede confirmação de presença ou já aconteceu.</p>' : `
-    <h3>Irão (${x.irao.length})</h3>${lista(x.irao, n => `<li>${esc(n)}</li>`)}
-    <h3>Não irão (${x.nao.length})</h3>${lista(x.nao, n => `<li>${esc(n.nome)} — ${esc(n.motivo)}</li>`)}
-    <h3 class="pr-pend">Sem resposta (${x.sem.length})</h3>${lista(x.sem, n => `<li>${esc(n)}</li>`)}`}</div>
-    <div class="rodape"><button class="btn" id="fechar" type="button">Fechar</button></div>`;
+  let mudou = false;
+  d.innerHTML = `<h2 id="dlgT">Presenças: ${esc(ev.titulo)}</h2><div id="corpoPres"><p class="vazio">Carregando…</p></div><div class="rodape"><button class="btn" id="fechar" type="button">Fechar</button></div>`;
   d.showModal();
   $('#fechar').onclick = () => d.close();
+  d.onclose = () => { d.onclick = null; d.onclose = null; if (mudou && aoMudar) aoMudar(); };
+  const status = l => l.vai === null ? 'sem resposta' : l.vai ? 'irá' : 'não irá — ' + l.motivo;
+  const desenhar = async () => {
+    const r = await resumoPresencas(), x = r && r.porEvento[ev.id], c = $('#corpoPres');
+    if (!c) return;
+    if (!x) { c.innerHTML = '<p class="suave">Este evento não pede confirmação de presença ou já aconteceu.</p>'; return; }
+    if (!x.linhas.length) { c.innerHTML = '<p class="suave">Nenhum médium cadastrado ainda.</p>'; return; }
+    c.innerHTML = `<p class="suave">Irão ${x.irao.length} · Não irão ${x.nao.length} · Sem resposta ${x.sem.length}. Quem não tem conta no site não consegue responder: registre por essa pessoa aqui.</p><ul class="lista-m">`
+      + [...x.sem, ...x.nao, ...x.irao].map(l => `<li data-m="${l.id}"><div><strong>${esc(l.nome)}</strong>${l.semConta ? ' <span class="suave">(sem conta)</span>' : ''}<br><span class="${l.vai === null ? 'pr-pend' : 'suave'}">${esc(status(l))}</span></div>
+        <div class="pr-linha"><button class="btn sec peq" data-r="sim" aria-pressed="${l.vai === true}">Irá</button><button class="btn sec peq" data-r="nao" aria-pressed="${l.vai === false}">Não irá</button></div>
+        <div class="pr-motivo" hidden><input maxlength="200" placeholder="Motivo (obrigatório)" aria-label="Motivo"><button class="btn peq" data-r="salvar">Salvar</button></div></li>`).join('') + '</ul>';
+  };
+  d.onclick = async e => {
+    const b = e.target.closest('button[data-r]'); if (!b) return;
+    const li = b.closest('li'), mid = Number(li.dataset.m);
+    if (b.dataset.r === 'nao') { li.querySelector('.pr-motivo').hidden = false; li.querySelector('input').focus(); return; }
+    let vai = b.dataset.r === 'sim', motivo = null;
+    if (b.dataset.r === 'salvar') {
+      motivo = li.querySelector('input').value.trim();
+      if (!motivo) { aviso('Informe o motivo.', true); return; }
+      vai = false;
+    }
+    const {error} = await sb.from('presencas').upsert({evento_id: ev.id, membro_id: mid, vai, motivo, atualizado_em: new Date().toISOString()}, {onConflict: 'evento_id,membro_id'});
+    if (error) { aviso(msgErro(error), true); return; }
+    mudou = true; aviso('Resposta registrada.'); desenhar();
+  };
+  desenhar();
 }
 
 function blocoEvento(x, resp) {
@@ -466,7 +530,7 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/usuarios','Usuários']];
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque']];
 const abas = atual => '<div class="abas">' + ABAS.map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin() {
@@ -516,25 +580,6 @@ const CFG = {
       {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'eventos'},
       {k:'publico', r:'Aberto ao público (desmarque para só membros)', tipo:'checkbox', padrao:true},
       {k:'pede_presenca', r:'Pedir confirmação de presença dos membros', tipo:'checkbox', padrao:true}
-    ]
-  },
-  membros: {
-    aba:'#/admin/membros', tabela:'membros', titulo:'Membros', singular:'membro', botao:'Novo membro',
-    vazio:'Nenhum membro cadastrado. Cadastre o primeiro.',
-    ordem:['nome', true], busca:['nome','telefone','observacoes'], nome:r => r.nome,
-    colunas:[
-      {r:'Nome', fmt:r => r.nome},
-      {r:'Telefone', fmt:r => r.telefone || ''},
-      {r:'Nascimento', fmt:r => dataBR(r.nascimento)},
-      {r:'Entrada', fmt:r => dataBR(r.data_entrada)},
-      {r:'Observações', fmt:r => (r.observacoes || '').slice(0, 60)}
-    ],
-    campos:[
-      {k:'nome', r:'Nome', tipo:'text', req:true},
-      {k:'telefone', r:'Telefone', tipo:'text'},
-      {k:'nascimento', r:'Data de nascimento', tipo:'date'},
-      {k:'data_entrada', r:'Data de entrada', tipo:'date'},
-      {k:'observacoes', r:'Observações', tipo:'textarea'}
     ]
   },
   lancamentos: {
@@ -700,7 +745,7 @@ async function viewCrud(cfg) {
   $('#lista').onclick = async ev => {
     const b = ev.target.closest('button[data-a]'); if (!b) return;
     const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
-    if (b.dataset.a === 'r') { abrirRespostas(row, ctx[row.id]); return; }
+    if (b.dataset.a === 'r') { abrirRespostas(row, carregar); return; }
     if (b.dataset.a === 'e') { abrirForm(cfg, row, carregar); return; }
     if (!(await confirmar(`Excluir "${cfg.nome(row)}"? Esta ação não pode ser desfeita.`, 'Excluir ' + cfg.singular))) return;
     const {data, error} = await sb.from(cfg.tabela).delete().eq('id', row.id).select();
@@ -712,26 +757,132 @@ async function viewCrud(cfg) {
   carregar();
 }
 
-async function viewUsuarios() {
-  app.innerHTML = abas('#/admin/usuarios') + `<div class="cab"><h1>Usuários</h1></div>
-    <p class="suave">Quem se cadastra no site entra como "Aguardando". Aprove como Membro para liberar os eventos internos. O papel Administrador dá acesso total ao painel.</p>
+
+/* ---------- Cadastro de pessoas (Membros) ---------- */
+
+const ROTULO_ACESSO = {pendente:'aguardando', consulente:'consulente', membro:'médium', admin:'administrador'};
+
+function resumoPessoa(m) {
+  const T = TERMOS, rot = k => (T.funcoes[k] || T.cargos[k] || {r:k}).r;
+  const f = (m.funcoes || []).map(rot);
+  if (m.tipo === 'medium') return [...f, m.grau ? T.graus[m.grau].r : null].filter(Boolean).join(' · ');
+  return f.join(' · ');
+}
+
+async function viewMembros() {
+  const T = TERMOS;
+  app.innerHTML = abas('#/admin/membros') + `<div id="alertaPres"></div><div class="cab"><h1>Membros</h1><button class="btn" id="novo">Novo cadastro</button></div>
+    <p class="suave">Cadastro único de todas as pessoas da casa: administradores, médiuns e consulentes. O acesso ao site segue o tipo do cadastro.</p>
+    <div id="contas"></div>
+    <div class="filtros"><input id="busca" type="search" placeholder="Buscar por nome ou telefone" aria-label="Buscar">
+    <select id="ftipo" aria-label="Filtrar por tipo" style="max-width:200px"><option value="">Todos os tipos</option>${Object.entries(T.tipos).map(([k, v]) => `<option value="${k}">${esc(v.r)}</option>`).join('')}</select></div>
     <div id="lista"><p class="vazio">Carregando…</p></div>`;
-  const {data, error} = await sb.from('profiles').select('*').order('criado_em', {ascending:false});
-  if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
-  const rot = {pendente:'Aguardando', membro:'Membro', admin:'Administrador'};
-  $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Nome</th><th>Cadastro em</th><th>Papel</th></tr></thead><tbody>`
-    + data.map(u => `<tr><td>${esc(u.nome || '(sem nome)')}</td><td>${dataBR(u.criado_em)}</td><td>${u.id === sessao.user.id
-      ? 'Você (' + rot[u.papel] + ')'
-      : `<select data-id="${u.id}" data-nome="${esc(u.nome || '')}" aria-label="Papel de ${esc(u.nome || 'usuário')}">${Object.keys(rot).map(k => `<option value="${k}"${k === u.papel ? ' selected' : ''}>${rot[k]}</option>`).join('')}</select>`}</td></tr>`).join('')
-    + '</tbody></table></div>';
-  $('#lista').onchange = async ev => {
-    const s = ev.target.closest('select[data-id]'); if (!s) return;
-    const original = data.find(u => u.id === s.dataset.id).papel;
-    if (s.value === 'admin' && !(await confirmar(`Tornar "${s.dataset.nome}" administrador? Essa pessoa poderá ver e alterar tudo, inclusive o financeiro.`, 'Tornar administrador'))) { s.value = original; return; }
-    const res = await sb.from('profiles').update({papel: s.value}).eq('id', s.dataset.id).select();
-    if (res.error || !res.data || !res.data.length) { aviso(res.error ? msgErro(res.error) : 'Não foi possível alterar.', true); s.value = original; return; }
-    data.find(u => u.id === s.dataset.id).papel = s.value;
-    aviso('Papel atualizado.');
+  preencherAlerta();
+  let linhas = [], contas = [];
+  const desenhar = () => {
+    $('#contas').innerHTML = contas.length
+      ? `<div class="aviso-pend"><strong>Contas do site sem cadastro (${contas.length})</strong><ul style="margin:.4rem 0 0;padding-left:1.1rem">${contas.map(c => `<li>${esc(c.nome || '(sem nome)')} <span class="suave">· acesso atual: ${ROTULO_ACESSO[c.papel] || c.papel}</span> <button class="btn peq" data-c="${c.id}">Cadastrar</button></li>`).join('')}</ul></div>` : '';
+    const q = norm($('#busca').value), t = $('#ftipo').value;
+    const rs = linhas.filter(m => (!q || norm(m.nome).includes(q) || norm(m.telefone).includes(q)) && (!t || m.tipo === t));
+    if (!linhas.length) { $('#lista').innerHTML = '<p class="vazio">Nenhum cadastro ainda. Toque em "Novo cadastro" para incluir a primeira pessoa.</p>'; return; }
+    if (!rs.length) { $('#lista').innerHTML = '<p class="vazio">Nada encontrado com esse filtro.</p>'; return; }
+    $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Função e grau</th><th>Acesso ao site</th><th></th></tr></thead><tbody>`
+      + rs.map(m => `<tr><td>${esc(m.nome)}${m.telefone ? `<br><span class="suave">${esc(m.telefone)}</span>` : ''}</td><td>${esc(T.tipos[m.tipo] ? T.tipos[m.tipo].r : m.tipo)}</td><td>${esc(resumoPessoa(m))}</td><td>${m.usuario_id ? ((m.tipo === 'administrador' || m.acesso_admin) ? 'Com conta (admin)' : 'Com conta') : 'Sem conta'}</td>
+        <td class="acoes"><button class="btn sec peq" data-a="e" data-id="${m.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${m.id}">Excluir</button></td></tr>`).join('')
+      + '</tbody></table></div>';
+  };
+  const carregar = async () => {
+    const [m, p] = await Promise.all([sb.from('membros').select('*').order('nome'), sb.from('profiles').select('id,nome,papel').order('criado_em', {ascending:false})]);
+    if (m.error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(m.error))}</p>`; return; }
+    linhas = m.data;
+    const usados = new Set(linhas.map(x => x.usuario_id).filter(Boolean));
+    contas = (p.data || []).filter(x => !usados.has(x.id));
+    desenhar();
+  };
+  $('#novo').onclick = () => abrirFormMembro(null, null, carregar);
+  $('#busca').oninput = desenhar;
+  $('#ftipo').onchange = desenhar;
+  $('#contas').onclick = ev => {
+    const b = ev.target.closest('button[data-c]'); if (!b) return;
+    const c = contas.find(x => x.id === b.dataset.c); if (!c) return;
+    abrirFormMembro(null, {nome: c.nome, usuario_id: c.id}, carregar);
+  };
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
+    if (b.dataset.a === 'e') { abrirFormMembro(row, null, carregar); return; }
+    if (!(await confirmar(`Excluir o cadastro de "${row.nome}"? Esta ação não pode ser desfeita. Se houver conta do site vinculada, ela volta a ficar "aguardando".`, 'Excluir cadastro'))) return;
+    const {data, error} = await sb.from('membros').delete().eq('id', row.id).select();
+    if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
+    aviso('Excluído.'); carregar();
+  };
+  carregar();
+}
+
+async function abrirFormMembro(row, pre, aoSalvar) {
+  const T = TERMOS, novo = !row, r = row || pre || {}, f = r.funcoes || [];
+  const [pf, ms] = await Promise.all([
+    sb.from('profiles').select('id,nome,papel').order('nome'),
+    sb.from('membros').select('usuario_id').not('usuario_id', 'is', null)
+  ]);
+  const usados = new Set((ms.data || []).map(x => x.usuario_id));
+  const contasLivres = (pf.data || []).filter(p => !usados.has(p.id) || p.id === r.usuario_id);
+  const pick = (o, ks) => Object.fromEntries(ks.map(k => [k, o[k]]));
+  const grupo = (nome, itens, marcados, tipo) => Object.entries(itens).map(([k, v]) =>
+    `<label class="chk op"><input type="${tipo || 'checkbox'}" name="${nome}" value="${k}"${marcados.includes(k) ? ' checked' : ''}><span><strong>${esc(v.r)}</strong><small>${esc(v.d)}</small></span></label>`).join('');
+  const d = $('#dlg');
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${novo ? 'Novo cadastro' : 'Editar cadastro'}</h2>
+    <label for="m_nome">Nome *</label><input id="m_nome" value="${esc(r.nome || '')}" autocomplete="off">
+    <label for="m_tipo">Tipo de cadastro *</label>
+    <select id="m_tipo"><option value="">Selecione…</option>${Object.entries(T.tipos).map(([k, v]) => `<option value="${k}"${r.tipo === k ? ' selected' : ''}>${esc(v.r)}</option>`).join('')}</select>
+    <p class="ajuda" id="exTipo"></p>
+    <div class="sec-m" id="sec_administrador" hidden><h3>Função</h3>${grupo('f_adm', pick(T.funcoes, ['colaborador']), f.length ? f : ['colaborador'])}</div>
+    <div class="sec-m" id="sec_medium" hidden>
+      <p class="ajuda">${esc(T.aviso)}</p>
+      <h3>Funções na corrente</h3>${grupo('f_med', pick(T.funcoes, ['curimba', 'cambone', 'incorporante']), f)}
+      <h3>Cargos de liderança</h3>${grupo('f_cargo', T.cargos, f)}
+      <h3>Grau mediúnico</h3>
+      <select id="m_grau" aria-label="Grau mediúnico"><option value="">Não informado</option>${Object.entries(T.graus).map(([k, v]) => `<option value="${k}"${String(r.grau) === k ? ' selected' : ''}>${esc(v.r)}</option>`).join('')}</select>
+      <p class="ajuda" id="exGrau"></p>
+      <label class="chk op"><input type="checkbox" id="m_acesso"${r.acesso_admin ? ' checked' : ''}><span><strong>Acesso de administrador no site</strong><small>Libera o painel completo (cadastros, financeiro, estoque). Marque apenas para quem administra a casa, como o dirigente.</small></span></label>
+    </div>
+    <div class="sec-m" id="sec_consulente" hidden><h3>Função</h3>${grupo('f_con', pick(T.funcoes, ['contribuinte', 'nao_contribuinte']), f, 'radio')}</div>
+    <label for="m_tel">Telefone</label><input id="m_tel" type="tel" value="${esc(r.telefone || '')}" inputmode="tel">
+    <label for="m_nasc">Data de nascimento</label><input id="m_nasc" type="date" value="${esc(r.nascimento || '')}">
+    <label for="m_entr">Data de entrada na casa</label><input id="m_entr" type="date" value="${esc(r.data_entrada || '')}">
+    <label for="m_obs">Observações (internas)</label><textarea id="m_obs">${esc(r.observacoes || '')}</textarea>
+    <label for="m_conta">Conta de acesso ao site</label>
+    <select id="m_conta"><option value="">Sem conta (apenas cadastro)</option>${contasLivres.map(c => `<option value="${c.id}"${c.id === r.usuario_id ? ' selected' : ''}>${esc(c.nome || '(sem nome)')} — acesso atual: ${ROTULO_ACESSO[c.papel] || c.papel}</option>`).join('')}</select>
+    <p class="ajuda">Ao vincular uma conta, o acesso dela ao site passa a seguir o tipo escolhido acima.</p>
+    <p class="erro" id="erroF" role="alert"></p>
+    <div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar cadastro</button></div></form>`;
+  const atualizar = () => {
+    const t = $('#m_tipo').value, g = $('#m_grau').value;
+    $('#exTipo').textContent = t ? T.tipos[t].d : 'Escolha o tipo de cadastro para ver as opções.';
+    ['administrador', 'medium', 'consulente'].forEach(k => { $('#sec_' + k).hidden = k !== t; });
+    $('#exGrau').textContent = g ? T.graus[g].d : 'Escolha o grau para ver a explicação.';
+  };
+  $('#m_tipo').onchange = atualizar; $('#m_grau').onchange = atualizar; atualizar();
+  d.showModal();
+  $('#m_nome').focus();
+  $('#cancelar').onclick = () => d.close();
+  const erro = t => { $('#erroF').textContent = t; };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const nome = $('#m_nome').value.trim(), tipo = $('#m_tipo').value;
+    if (!nome) { erro('Preencha o nome.'); $('#m_nome').focus(); return; }
+    if (!tipo) { erro('Escolha o tipo de cadastro.'); $('#m_tipo').focus(); return; }
+    const marc = n => [...d.querySelectorAll(`input[name="${n}"]:checked`)].map(i => i.value);
+    let funcoes = [], grau = null, acesso = false;
+    if (tipo === 'administrador') funcoes = marc('f_adm');
+    if (tipo === 'medium') { funcoes = [...marc('f_med'), ...marc('f_cargo')]; grau = $('#m_grau').value ? Number($('#m_grau').value) : null; acesso = $('#m_acesso').checked; }
+    if (tipo === 'consulente') { funcoes = marc('f_con'); if (!funcoes.length) { erro('Escolha a função: contribuinte ou não contribuinte.'); return; } }
+    const v = id => $(id).value.trim() || null;
+    const obj = {nome, tipo, funcoes, grau, acesso_admin: acesso, telefone: v('#m_tel'), nascimento: v('#m_nasc'), data_entrada: v('#m_entr'), observacoes: v('#m_obs'), usuario_id: $('#m_conta').value || null};
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const res = novo ? await sb.from('membros').insert(obj).select() : await sb.from('membros').update(obj).eq('id', row.id).select();
+    if (res.error || !res.data || !res.data.length) { erro(res.error ? msgErro(res.error) : 'Não foi possível salvar.'); btn.disabled = false; return; }
+    d.close(); aviso('Salvo.'); aoSalvar();
   };
 }
 
@@ -741,10 +892,9 @@ const ROTAS = {
   '': viewInicio, 'agenda': viewAgenda, 'entrar': viewEntrar,
   'admin/noticias': () => viewCrud(CFG.noticias),
   'admin/eventos': () => viewCrud(CFG.eventos),
-  'admin/membros': () => viewCrud(CFG.membros),
+  'admin/membros': viewMembros,
   'admin/financeiro': () => viewCrud(CFG.lancamentos),
-  'admin/estoque': () => viewCrud(CFG.estoque),
-  'admin/usuarios': viewUsuarios
+  'admin/estoque': () => viewCrud(CFG.estoque)
 };
 
 async function rotear() {
