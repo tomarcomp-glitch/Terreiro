@@ -106,6 +106,7 @@ label.op small{font-weight:400;color:var(--suave);line-height:1.35}
 .lista-m .pr-linha{display:flex;gap:.4rem;margin-top:.3rem}
 .lista-m .pr-motivo{margin-top:.4rem;display:flex;gap:.4rem}
 .lista-m .pr-motivo[hidden]{display:none}
+.t-rec{color:var(--ok);font-weight:600}.t-des{color:var(--perigo);font-weight:600}
 @media print{.topo,.btn,.filtros,.abas,.acoes{display:none!important}}
 .topo{background:rgba(255,255,255,.94);backdrop-filter:blur(6px);border-bottom:1px solid var(--linha);box-shadow:0 2px 10px rgba(13,59,158,.06)}
 .hero{position:relative;border-bottom:1px solid var(--linha)!important;margin-bottom:2rem}
@@ -269,6 +270,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
+  if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivo terreiro_novidades.sql).';
   return m;
 }
 
@@ -536,7 +538,7 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque']];
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios']];
 const abas = atual => '<div class="abas">' + ABAS.map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin() {
@@ -545,6 +547,7 @@ function exigirAdmin() {
   return true;
 }
 
+const TIPOS_EV = {gira:'Gira', reuniao:'Reunião', festa:'Festa / evento', outro:'Outro'};
 const CFG = {
   noticias: {
     aba:'#/admin/noticias', tabela:'noticias', titulo:'Notícias', singular:'notícia', botao:'Nova notícia',
@@ -573,6 +576,7 @@ const CFG = {
     colunas:[
       {r:'Data e hora', fmt:r => dataHoraBR(r.data_hora)},
       {r:'Evento', fmt:r => r.titulo},
+      {r:'Tipo', fmt:r => TIPOS_EV[r.tipo] || ''},
       {r:'Local', fmt:r => r.local || ''},
       {r:'Aberto ao público', fmt:r => r.publico ? 'Sim' : 'Só membros'},
       {r:'Imagem', fmt:r => r.imagem_path ? 'Sim' : ''},
@@ -581,11 +585,13 @@ const CFG = {
     campos:[
       {k:'titulo', r:'Título', tipo:'text', req:true},
       {k:'data_hora', r:'Data e hora', tipo:'datetime', req:true},
+      {k:'tipo', r:'Tipo de evento', tipo:'select', req:true, padrao:'gira', opcoes:[{v:'gira', t:'Gira'}, {v:'reuniao', t:'Reunião'}, {v:'festa', t:'Festa / evento'}, {v:'outro', t:'Outro'}]},
       {k:'local', r:'Local', tipo:'text'},
       {k:'descricao', r:'Descrição', tipo:'textarea'},
       {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'eventos'},
       {k:'publico', r:'Aberto ao público (desmarque para só membros)', tipo:'checkbox', padrao:true},
-      {k:'pede_presenca', r:'Pedir confirmação de presença dos membros', tipo:'checkbox', padrao:true}
+      {k:'pede_presenca', r:'Pedir confirmação de presença dos membros', tipo:'checkbox', padrao:true},
+      {k:'repetir', r:'Repetir toda semana por mais quantas semanas? (0 = não repetir)', tipo:'number', virtual:true, padrao:0, min:0}
     ]
   },
   lancamentos: {
@@ -622,7 +628,7 @@ const CFG = {
   estoque: {
     aba:'#/admin/estoque', tabela:'estoque', titulo:'Estoque', singular:'item', botao:'Novo item',
     vazio:'Nenhum item no estoque. Cadastre o primeiro material.',
-    ordem:['item', true], busca:['item'], nome:r => r.item,
+    ordem:['item', true], busca:['item'], nome:r => r.item, movimento:true,
     destaque: r => Number(r.minimo) > 0 && Number(r.quantidade) <= Number(r.minimo),
     colunas:[
       {r:'Item', fmt:r => r.item},
@@ -644,6 +650,7 @@ async function abrirForm(cfg, row, aoSalvar) {
   const ops = {};
   for (const c of cfg.campos) if (c.tipo === 'select') ops[c.k] = typeof c.opcoes === 'function' ? await c.opcoes() : c.opcoes;
   const campo = c => {
+    if (c.virtual && !novo) return '';
     const pad = typeof c.padrao === 'function' ? c.padrao() : c.padrao;
     const v = novo ? pad : r[c.k];
     const id = 'f_' + c.k;
@@ -670,9 +677,10 @@ async function abrirForm(cfg, row, aoSalvar) {
   $('#frm').onsubmit = async ev => {
     ev.preventDefault();
     const obj = {};
-    let arquivo = null;
+    let arquivo = null, rep = 0;
     for (const c of cfg.campos) {
       const el = $('#f_' + c.k);
+      if (c.virtual) { rep = el ? Math.min(52, Math.max(0, parseInt(el.value, 10) || 0)) : 0; continue; }
       if (c.tipo === 'imagem') {
         const rm = $('#f_' + c.k + '_rm');
         if (el.files && el.files[0]) arquivo = el.files[0];
@@ -713,13 +721,18 @@ async function abrirForm(cfg, row, aoSalvar) {
       btn.disabled = false; return;
     }
     if (antiga) await apagarImagens([antiga]);
+    if (novo && rep > 0 && cfg.tabela === 'eventos') {
+      const copias = Array.from({length: rep}, (_, i) => { const dt = new Date(obj.data_hora); dt.setDate(dt.getDate() + 7 * (i + 1)); return {...obj, data_hora: dt.toISOString(), imagem_path: null}; });
+      const rc = await sb.from('eventos').insert(copias);
+      if (rc.error) aviso('O evento foi salvo, mas as repetições falharam: ' + msgErro(rc.error), true);
+    }
     d.close(); aviso('Salvo.'); aoSalvar();
   };
 }
 
 async function viewCrud(cfg) {
   const mesPad = hoje().slice(0, 7);
-  app.innerHTML = abas(cfg.aba) + '<div id="alertaPres"></div>' + `<div class="cab"><h1>${esc(cfg.titulo)}</h1><button class="btn" id="novo">${esc(cfg.botao)}</button></div>
+  app.innerHTML = abas(cfg.aba) + (cfg.movimento ? sub(SUBEST, cfg.aba) : '') + '<div id="alertaPres"></div>' + `<div class="cab"><h1>${esc(cfg.titulo)}</h1><button class="btn" id="novo">${esc(cfg.botao)}</button></div>
     <div class="filtros"><input id="busca" type="search" placeholder="Buscar" aria-label="Buscar">${cfg.filtroMes ? `<input id="mes" type="month" value="${mesPad}" aria-label="Filtrar por mês" style="max-width:190px">` : ''}</div>
     <div id="resumo"></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
   preencherAlerta();
@@ -736,7 +749,7 @@ async function viewCrud(cfg) {
     $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr>${cfg.colunas.map(c => `<th class="${c.num ? 'num' : ''}">${esc(c.r)}</th>`).join('')}<th></th></tr></thead><tbody>`
       + rs.map(r => `<tr class="${cfg.destaque && cfg.destaque(r) ? 'alerta' : ''}">`
         + cfg.colunas.map(c => `<td class="${c.num ? 'num ' : ''}${c.cls ? c.cls(r, ctx) : ''}">${esc(c.fmt(r, ctx))}</td>`).join('')
-        + `<td class="acoes">${cfg.respostas ? `<button class="btn sec peq" data-a="r" data-id="${r.id}">Respostas</button> ` : ''}<button class="btn sec peq" data-a="e" data-id="${r.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${r.id}">Excluir</button></td></tr>`).join('')
+        + `<td class="acoes">${cfg.movimento ? `<button class="btn sec peq" data-a="ent" data-id="${r.id}">Entrada</button> <button class="btn sec peq" data-a="sai" data-id="${r.id}">Saída</button> ` : ''}${cfg.respostas ? `<button class="btn sec peq" data-a="r" data-id="${r.id}">Respostas</button> ` : ''}<button class="btn sec peq" data-a="e" data-id="${r.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${r.id}">Excluir</button></td></tr>`).join('')
       + '</tbody></table></div>';
   };
   const carregar = async () => {
@@ -751,6 +764,7 @@ async function viewCrud(cfg) {
   $('#lista').onclick = async ev => {
     const b = ev.target.closest('button[data-a]'); if (!b) return;
     const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
+    if (b.dataset.a === 'ent' || b.dataset.a === 'sai') { abrirMov(row, b.dataset.a === 'ent' ? 'entrada' : 'saida', carregar); return; }
     if (b.dataset.a === 'r') { abrirRespostas(row, carregar); return; }
     if (b.dataset.a === 'e') { abrirForm(cfg, row, carregar); return; }
     if (!(await confirmar(`Excluir "${cfg.nome(row)}"? Esta ação não pode ser desfeita.`, 'Excluir ' + cfg.singular))) return;
@@ -892,6 +906,259 @@ async function abrirFormMembro(row, pre, aoSalvar) {
   };
 }
 
+/* ---------- Estoque: movimentação, histórico, inventário ---------- */
+
+const SUBEST = [['#/admin/estoque','Itens'],['#/admin/estoque/historico','Histórico'],['#/admin/estoque/inventario','Inventário']];
+const SUBREL = [['#/admin/relatorios','Semanal'],['#/admin/relatorios/mensal','Mensal']];
+const TP_MOV = {entrada:['Entrada','t-rec'], saida:['Saída','t-des'], inventario:['Inventário','suave']};
+const sub = (L, a) => '<div class="abas">' + L.map(([h, t]) => `<a href="${h}"${h === a ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
+const isoD = d => d.toLocaleDateString('sv-SE');
+const tbl = (cab, rows, nums = [], foot) => `<div class="rolagem"><table><thead><tr>${cab.map((c, i) => `<th class="${nums.includes(i) ? 'num' : ''}">${c}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((c, i) => `<td class="${nums.includes(i) ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')}${foot ? `<tr>${foot.map((c, i) => `<td class="${i ? 'num' : ''}"><strong>${c}</strong></td>`).join('')}</tr>` : ''}</tbody></table></div>`;
+const qtd = n => String(Math.round((Number(n) || 0) * 1000) / 1000).replace('.', ',');
+const datalistPessoas = async () => {
+  const {data} = await sb.from('membros').select('nome').order('nome');
+  return '<datalist id="dlPes">' + (data || []).map(x => `<option value="${esc(x.nome)}">`).join('') + '</datalist>';
+};
+
+async function abrirMov(it, tipo, aoSalvar) {
+  const ent = tipo === 'entrada', d = $('#dlg');
+  d.onclick = null; d.onclose = null;
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${ent ? 'Entrada' : 'Saída'}: ${esc(it.item)}</h2>
+    <p class="suave">Em estoque agora: ${qtd(it.quantidade)} ${esc(it.unidade || '')}</p>
+    <label for="mv_q">Quantidade *</label><input id="mv_q" type="number" step="any" min="0" inputmode="decimal">
+    <label for="mv_p">${ent ? 'Quem entregou ou trouxe *' : 'Quem retirou *'}</label><input id="mv_p" list="dlPes" maxlength="120" autocomplete="off">${await datalistPessoas()}
+    <label for="mv_o">Observação</label><input id="mv_o" maxlength="200">
+    <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Registrar ${ent ? 'entrada' : 'saída'}</button></div></form>`;
+  d.showModal(); $('#mv_q').focus();
+  $('#cancelar').onclick = () => d.close();
+  const erro = t => { $('#erroF').textContent = t; };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const q = Number($('#mv_q').value), p = $('#mv_p').value.trim();
+    if (!(q > 0)) { erro('Informe uma quantidade maior que zero.'); return; }
+    if (!p) { erro(ent ? 'Informe quem entregou.' : 'Informe quem retirou.'); return; }
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const {error} = await sb.rpc('estoque_movimentar', {p_item: Number(it.id), p_tipo: tipo, p_qtd: q, p_pessoa: p, p_obs: $('#mv_o').value.trim() || null});
+    if (error) { erro(msgErro(error)); btn.disabled = false; return; }
+    d.close(); aviso(ent ? 'Entrada registrada.' : 'Saída registrada.'); aoSalvar();
+  };
+}
+
+async function viewHistorico() {
+  app.innerHTML = abas('#/admin/estoque') + sub(SUBEST, '#/admin/estoque/historico') + `<div class="cab"><h1>Histórico do estoque</h1><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <div class="filtros"><input id="busca" type="search" placeholder="Buscar item ou pessoa" aria-label="Buscar"><select id="ftp" aria-label="Tipo" style="max-width:170px"><option value="">Todos os tipos</option><option value="entrada">Entradas</option><option value="saida">Saídas</option><option value="inventario">Inventário</option></select><input id="mes" type="month" aria-label="Mês" style="max-width:170px"></div>
+    <div id="lista"><p class="vazio">Carregando…</p></div>`;
+  const {data, error} = await sb.from('estoque_mov').select('*').order('criado_em', {ascending: false}).limit(1000);
+  if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+  const desenhar = () => {
+    const q = norm($('#busca').value), t = $('#ftp').value, m = $('#mes').value;
+    const rs = data.filter(r => (!q || norm(r.item_nome).includes(q) || norm(r.pessoa_nome).includes(q)) && (!t || r.tipo === t) && (!m || isoD(new Date(r.criado_em)).startsWith(m)));
+    if (!data.length) { $('#lista').innerHTML = '<p class="vazio">Nenhuma movimentação ainda. Use os botões Entrada e Saída na lista de itens.</p>'; return; }
+    if (!rs.length) { $('#lista').innerHTML = '<p class="vazio">Nada encontrado com esse filtro.</p>'; return; }
+    $('#lista').innerHTML = tbl(['Data e hora', 'Tipo', 'Item', 'Quantidade', 'Saldo', 'Quem entregou / retirou / contou', 'Registrado por', 'Observação'],
+      rs.map(r => {
+        const n = Number(r.quantidade), tp = TP_MOV[r.tipo] || [r.tipo, ''];
+        const v = r.tipo === 'entrada' ? '+ ' + qtd(n) : r.tipo === 'saida' ? '− ' + qtd(n) : (n > 0 ? '+ ' : n < 0 ? '− ' : '') + qtd(Math.abs(n));
+        return [dataHoraBR(r.criado_em), `<span class="${tp[1]}">${esc(tp[0])}</span>`, esc(r.item_nome), v, `${qtd(r.saldo_anterior)} → ${qtd(r.saldo_novo)}`, esc(r.pessoa_nome || ''), esc(r.por_nome || ''), esc(r.obs || '')];
+      }), [3, 4]) + (data.length >= 1000 ? '<p class="suave">Mostrando as 1000 movimentações mais recentes.</p>' : '');
+  };
+  $('#busca').oninput = desenhar; $('#ftp').onchange = desenhar; $('#mes').oninput = desenhar;
+  desenhar();
+}
+
+async function viewInventario() {
+  app.innerHTML = abas('#/admin/estoque') + sub(SUBEST, '#/admin/estoque/inventario') + `<div class="cab"><h1>Inventário</h1><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <p class="suave">Conte o que há de fato e digite em "Contado". Itens em branco não mudam. Ao salvar, o estoque passa a ter a quantidade contada e cada item conferido fica registrado no histórico.</p><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  const {data, error} = await sb.from('estoque').select('*').order('item');
+  if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+  if (!data.length) { $('#lista').innerHTML = '<p class="vazio">Nenhum item no estoque. Cadastre os itens primeiro.</p>'; return; }
+  $('#lista').innerHTML = tbl(['Item', 'No sistema', 'Contado'], data.map(r => [esc(r.item), `${qtd(r.quantidade)} ${esc(r.unidade || '')}`, `<input class="cnt" data-id="${r.id}" type="number" step="any" min="0" inputmode="decimal" aria-label="Contado: ${esc(r.item)}" style="max-width:130px">`]), [1])
+    + `<label for="inv_p">Quem fez a contagem *</label><input id="inv_p" list="dlPes" maxlength="120" autocomplete="off">${await datalistPessoas()}
+    <label for="inv_o">Observação</label><input id="inv_o" maxlength="200"><div class="rodape"><button class="btn" id="inv_s">Salvar inventário</button></div>`;
+  $('#inv_s').onclick = async () => {
+    const p = $('#inv_p').value.trim(), campos = [...document.querySelectorAll('input.cnt')].filter(i => i.value.trim() !== '');
+    if (!campos.length) { aviso('Digite a quantidade contada em pelo menos um item.', true); return; }
+    if (!p) { aviso('Informe quem fez a contagem.', true); $('#inv_p').focus(); return; }
+    if (campos.some(i => isNaN(Number(i.value)) || Number(i.value) < 0)) { aviso('Há quantidade inválida na contagem.', true); return; }
+    const b = $('#inv_s'); b.disabled = true;
+    let ok = 0;
+    for (const i of campos) {
+      const {error: e} = await sb.rpc('estoque_movimentar', {p_item: Number(i.dataset.id), p_tipo: 'inventario', p_qtd: Number(i.value), p_pessoa: p, p_obs: $('#inv_o').value.trim() || null});
+      if (e) { aviso(msgErro(e), true); break; }
+      ok++;
+    }
+    b.disabled = false;
+    if (ok) aviso(ok + (ok === 1 ? ' item conferido.' : ' itens conferidos.'));
+    if (ok === campos.length) viewInventario();
+  };
+}
+
+/* ---------- Relatórios: giras (semanal) e mensal ---------- */
+
+const GRUPOS = [['curimba', 'Médiuns curimbeiros'], ['cambone', 'Médiuns cambones'], ['incorporante', 'Médiuns incorporantes']];
+const segunda = ref => { const d = new Date(ref + 'T00:00:00'); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return d; };
+
+function relGira(ev, todos, fq, cs) {
+  const med = todos.filter(m => m.tipo === 'medium'), st = {};
+  const meus = fq.filter(x => x.evento_id === ev.id);
+  meus.forEach(x => { st[x.membro_id] = x; });
+  const por = s => med.filter(m => st[m.id] && st[m.id].status === s);
+  const pres = por('presente'), aus = por('ausente'), jus = por('justificada');
+  const dele = cs.filter(c => c.evento_id === ev.id);
+  const nomeM = id => (todos.find(x => x.id === id) || {}).nome;
+  const lista = (l, f) => l.length ? `<ul>${l.map(f).join('')}</ul>` : '<p class="suave">Nenhum.</p>';
+  const grupo = ([k, t]) => {
+    const l = pres.filter(m => (m.funcoes || []).includes(k));
+    return `<h3>${t} (${l.length})</h3>` + lista(l, m => {
+      const c = k === 'incorporante' ? dele.filter(x => x.medium_id === m.id).map(x => x.nome).join(', ') : '';
+      return `<li>${esc(m.nome)}${c ? ' — consulente confirmado: ' + esc(c) : ''}</li>`;
+    });
+  };
+  const outros = pres.filter(m => !GRUPOS.some(([k]) => (m.funcoes || []).includes(k)));
+  return `<div class="lista-pres">${meus.length
+    ? `<p class="suave">Presentes: ${pres.length} · Ausentes sem justificativa: ${aus.length} · Ausentes justificados: ${jus.length}</p>${GRUPOS.map(grupo).join('')}${outros.length ? `<h3>Outros médiuns presentes (${outros.length})</h3>${lista(outros, m => `<li>${esc(m.nome)}</li>`)}` : ''}
+      <h3>Médiuns ausentes sem justificativa (${aus.length})</h3>${lista(aus, m => `<li>${esc(m.nome)}</li>`)}
+      ${jus.length ? `<h3>Ausentes com justificativa (${jus.length})</h3>${lista(jus, m => `<li>${esc(m.nome)}${st[m.id].motivo ? ' — ' + esc(st[m.id].motivo) : ''}</li>`)}` : ''}`
+    : '<p class="pr-pend">Chamada ainda não registrada. Toque em "Chamada".</p>'}
+    <h3>Consulentes confirmados (${dele.length})</h3>${lista(dele, c => `<li>${esc(c.nome)}${c.medium_id ? ' — com ' + esc(nomeM(c.medium_id) || '') : ''}</li>`)}</div>`;
+}
+
+async function viewRelSemanal(refPar) {
+  const ref = refPar || hoje(), seg = segunda(ref), prox = new Date(seg), fim = new Date(seg);
+  prox.setDate(prox.getDate() + 7); fim.setDate(fim.getDate() + 6);
+  app.innerHTML = abas('#/admin/relatorios') + sub(SUBREL, '#/admin/relatorios') + `<div class="cab"><h1>Relatório semanal: giras</h1><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <div class="filtros"><input id="semRef" type="date" value="${ref}" aria-label="Qualquer dia da semana" style="max-width:190px"><span class="suave">Semana de ${dataBR(isoD(seg))} a ${dataBR(isoD(fim))}</span></div><div id="corpo"><p class="vazio">Carregando…</p></div>`;
+  $('#semRef').onchange = e => { if (e.target.value) viewRelSemanal(e.target.value); };
+  let evs = [], todos = [];
+  const carregar = async () => {
+    const [e, m] = await Promise.all([
+      sb.from('eventos').select('id,titulo,data_hora').eq('tipo', 'gira').gte('data_hora', seg.toISOString()).lt('data_hora', prox.toISOString()).order('data_hora'),
+      sb.from('membros').select('id,nome,tipo,funcoes,grau').order('nome')]);
+    const ids = (e.data || []).map(x => x.id);
+    const [f, c] = (e.error || m.error || !ids.length) ? [{data: []}, {data: []}] : await Promise.all([sb.from('frequencia').select('*').in('evento_id', ids), sb.from('consulentes_gira').select('*').in('evento_id', ids)]);
+    const er = e.error || m.error || f.error || c.error;
+    if (er) { $('#corpo').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
+    evs = e.data; todos = m.data;
+    $('#corpo').innerHTML = evs.length ? evs.map(ev => `<section class="cartao" style="margin-bottom:1rem"><div class="cab"><div><h2>${esc(ev.titulo)}</h2><span class="suave">${dataHoraBR(ev.data_hora)}</span></div><div><button class="btn peq" data-a="ch" data-id="${ev.id}">Chamada</button> <button class="btn sec peq" data-a="co" data-id="${ev.id}">Consulentes</button></div></div>${relGira(ev, todos, f.data, c.data)}</section>`).join('')
+      : '<p class="vazio">Nenhuma gira nesta semana. Cadastre em Eventos usando o tipo "Gira".</p>';
+  };
+  $('#corpo').onclick = ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const e = evs.find(x => String(x.id) === b.dataset.id); if (!e) return;
+    if (b.dataset.a === 'ch') abrirChamada(e, todos.filter(m => m.tipo === 'medium'), carregar);
+    else abrirConsulentes(e, todos, carregar);
+  };
+  carregar();
+}
+
+async function abrirChamada(ev, med, aoSalvar) {
+  const [f, p] = await Promise.all([sb.from('frequencia').select('*').eq('evento_id', ev.id), sb.from('presencas').select('membro_id,vai,motivo').eq('evento_id', ev.id)]);
+  if (f.error || p.error) { aviso(msgErro(f.error || p.error), true); return; }
+  if (!med.length) { aviso('Nenhum médium cadastrado ainda.', true); return; }
+  const F = {}, P = {}; f.data.forEach(x => { F[x.membro_id] = x; }); p.data.forEach(x => { P[x.membro_id] = x; });
+  const ini = m => F[m.id] || (P[m.id] && P[m.id].vai === false ? {status: 'justificada', motivo: P[m.id].motivo} : {status: 'ausente', motivo: ''});
+  const d = $('#dlg'); d.onclick = null; d.onclose = null;
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">Chamada: ${esc(ev.titulo)}</h2><p class="suave">${dataHoraBR(ev.data_hora)}. Quem avisou que não iria, com motivo, já vem como justificado. Os demais começam como ausentes sem justificativa: marque quem esteve presente.</p>
+    <button type="button" class="btn sec peq" id="todos">Marcar todos como presentes</button>
+    <ul class="lista-m">${med.map(m => { const s = ini(m); return `<li data-m="${m.id}"><strong>${esc(m.nome)}</strong> <span class="suave">${esc(resumoPessoa(m))}</span><div class="pr-linha" style="flex-wrap:wrap">${[['presente', 'Presente'], ['justificada', 'Ausente justificado'], ['ausente', 'Ausente sem justificativa']].map(([v, t]) => `<label class="chk"><input type="radio" name="s${m.id}" value="${v}"${s.status === v ? ' checked' : ''}>${t}</label>`).join('')}</div><input class="mot" maxlength="200" placeholder="Motivo (se justificado)" aria-label="Motivo de ${esc(m.nome)}" value="${esc(s.motivo || '')}" style="margin-top:.4rem"></li>`; }).join('')}</ul>
+    <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar chamada</button></div></form>`;
+  d.showModal();
+  $('#cancelar').onclick = () => d.close();
+  $('#todos').onclick = () => d.querySelectorAll('input[value=presente]').forEach(i => { i.checked = true; });
+  $('#frm').onsubmit = async e => {
+    e.preventDefault();
+    const rows = [...d.querySelectorAll('li[data-m]')].map(li => {
+      const s = li.querySelector('input[type=radio]:checked').value, mot = li.querySelector('.mot').value.trim();
+      return {evento_id: ev.id, membro_id: Number(li.dataset.m), status: s, motivo: s === 'presente' ? null : (mot || null), atualizado_em: new Date().toISOString()};
+    });
+    const btn = $('#salvar'); btn.disabled = true;
+    const {error} = await sb.from('frequencia').upsert(rows, {onConflict: 'evento_id,membro_id'});
+    if (error) { $('#erroF').textContent = msgErro(error); btn.disabled = false; return; }
+    d.close(); aviso('Chamada salva.'); aoSalvar();
+  };
+}
+
+async function abrirConsulentes(ev, todos, aoMudar) {
+  const d = $('#dlg'); let mudou = false;
+  const inc = todos.filter(m => m.tipo === 'medium' && (m.funcoes || []).includes('incorporante'));
+  d.onclick = null;
+  d.innerHTML = `<h2 id="dlgT">Consulentes confirmados: ${esc(ev.titulo)}</h2><p class="suave">${dataHoraBR(ev.data_hora)}. Indique o médium incorporante que vai atender cada consulente.</p><div id="corpoC"><p class="vazio">Carregando…</p></div>
+    <form id="frmC" novalidate><label for="c_nome">Consulente *</label><input id="c_nome" list="dlCons" maxlength="120" autocomplete="off"><datalist id="dlCons">${todos.filter(x => x.tipo === 'consulente').map(x => `<option value="${esc(x.nome)}">`).join('')}</datalist>
+    <label for="c_med">Médium incorporante</label><select id="c_med"><option value="">Ainda não definido</option>${inc.map(m => `<option value="${m.id}">${esc(m.nome)}</option>`).join('')}</select>
+    <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="fechar">Fechar</button><button class="btn">Adicionar consulente</button></div></form>`;
+  d.showModal();
+  d.onclose = () => { d.onclick = null; d.onclose = null; if (mudou) aoMudar(); };
+  $('#fechar').onclick = () => d.close();
+  const desenhar = async () => {
+    const {data, error} = await sb.from('consulentes_gira').select('*').eq('evento_id', ev.id).order('id');
+    const c = $('#corpoC'); if (!c) return;
+    if (error) { c.innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+    c.innerHTML = data.length ? `<ul class="lista-m">${data.map(x => `<li><strong>${esc(x.nome)}</strong>${x.medium_id ? ' <span class="suave">— com ' + esc((todos.find(m => m.id === x.medium_id) || {}).nome || '') + '</span>' : ''} <button type="button" class="btn perigo peq" data-x="${x.id}">Remover</button></li>`).join('')}</ul>` : '<p class="suave">Nenhum consulente confirmado ainda.</p>';
+  };
+  d.onclick = async e => {
+    const b = e.target.closest('button[data-x]'); if (!b) return;
+    const {error} = await sb.from('consulentes_gira').delete().eq('id', Number(b.dataset.x));
+    if (error) { aviso(msgErro(error), true); return; }
+    mudou = true; desenhar();
+  };
+  $('#frmC').onsubmit = async e => {
+    e.preventDefault();
+    const nome = $('#c_nome').value.trim();
+    if (!nome) { $('#erroF').textContent = 'Informe o nome do consulente.'; return; }
+    const reg = todos.find(x => x.tipo === 'consulente' && norm(x.nome) === norm(nome));
+    const {error} = await sb.from('consulentes_gira').insert({evento_id: ev.id, nome, consulente_id: reg ? reg.id : null, medium_id: $('#c_med').value ? Number($('#c_med').value) : null});
+    if (error) { $('#erroF').textContent = msgErro(error); return; }
+    $('#erroF').textContent = ''; $('#c_nome').value = ''; $('#c_nome').focus();
+    mudou = true; desenhar();
+  };
+  desenhar();
+}
+
+async function viewRelMensal() {
+  app.innerHTML = abas('#/admin/relatorios') + sub(SUBREL, '#/admin/relatorios/mensal') + `<div class="cab"><h1>Relatório mensal</h1><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <div class="filtros"><input id="mesRef" type="month" value="${hoje().slice(0, 7)}" aria-label="Mês" style="max-width:190px"></div><div id="corpo"><p class="vazio">Carregando…</p></div>`;
+  const carregar = async () => {
+    const mes = $('#mesRef').value; if (!mes) return;
+    const [a, mm] = mes.split('-').map(Number), ini = new Date(a, mm - 1, 1), fim = new Date(a, mm, 1);
+    const [ev, lc, mb, es] = await Promise.all([
+      sb.from('eventos').select('id,titulo,data_hora').eq('tipo', 'gira').gte('data_hora', ini.toISOString()).lt('data_hora', fim.toISOString()).order('data_hora'),
+      sb.from('lancamentos').select('*').gte('data', isoD(ini)).lt('data', isoD(fim)).order('data'),
+      sb.from('membros').select('id,nome,tipo'),
+      sb.from('estoque').select('*').order('item')]);
+    const ids = (ev.data || []).map(x => x.id);
+    const fq = (ev.error || !ids.length) ? {data: []} : await sb.from('frequencia').select('evento_id,membro_id,status').in('evento_id', ids);
+    const er = ev.error || lc.error || mb.error || es.error || fq.error;
+    if (er) { $('#corpo').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
+    const nomes = {}; mb.data.forEach(x => { nomes[x.id] = x; });
+    const dataEv = {}; ev.data.forEach(x => { dataEv[x.id] = x.data_hora; });
+    const comChamada = new Set(fq.data.map(x => x.evento_id)).size;
+    const falt = {};
+    fq.data.filter(x => x.status === 'ausente' && nomes[x.membro_id] && nomes[x.membro_id].tipo === 'medium').forEach(x => { (falt[x.membro_id] = falt[x.membro_id] || []).push(dataEv[x.evento_id]); });
+    const faltRows = Object.entries(falt).map(([id, l]) => [esc(nomes[id].nome), String(l.length), l.sort().map(x => dataBR(isoD(new Date(x)))).join(', ')]).sort((x, y) => Number(y[1]) - Number(x[1]) || x[0].localeCompare(y[0]));
+    const cent = r => Math.round(Number(r.valor) * 100);
+    const nomeL = r => (nomes[r.membro_id] && nomes[r.membro_id].nome) || r.descricao;
+    const rec = lc.data.filter(r => r.tipo === 'receita'), des = lc.data.filter(r => r.tipo === 'despesa');
+    const mens = rec.filter(r => norm(r.categoria).startsWith('mensalidade')), doa = rec.filter(r => norm(r.categoria).startsWith('doac'));
+    const soma = l => l.reduce((s, r) => s + cent(r), 0);
+    const porNome = {}; mens.forEach(r => { const n = nomeL(r); porNome[n] = (porNome[n] || 0) + cent(r); });
+    const outras = soma(rec) - soma(mens) - soma(doa);
+    const baixo = r => (Number(r.minimo) > 0 && Number(r.quantidade) <= Number(r.minimo)) || Number(r.quantidade) < 0;
+    const un = r => `${qtd(r.quantidade)} ${esc(r.unidade || '')}`.trim();
+    const sec = (t, corpo) => `<section class="cartao" style="margin-bottom:1rem"><h2>${t}</h2>${corpo}</section>`;
+    const vazio = t => `<p class="vazio">${t}</p>`;
+    $('#corpo').innerHTML =
+      sec('Médiuns com faltas não justificadas', `<p class="suave">${ev.data.length} gira(s) no mês, ${comChamada} com chamada registrada.</p>` + (faltRows.length ? tbl(['Médium', 'Faltas', 'Datas'], faltRows, [1]) : vazio('Nenhuma falta não justificada registrada no mês.')))
+      + sec('Mensalidades por médium', Object.keys(porNome).length ? tbl(['Médium', 'Valor'], Object.entries(porNome).sort((x, y) => x[0].localeCompare(y[0])).map(([n, v]) => [esc(n), brl(v / 100)]), [1], ['Total', brl(soma(mens) / 100)]) : vazio('Nenhuma mensalidade lançada. Lance como receita com a categoria "mensalidade" e o membro.'))
+      + sec('Doações', doa.length ? tbl(['Data', 'Consulente', 'Valor'], doa.map(r => [dataBR(r.data), esc(nomeL(r)), brl(r.valor)]), [2], ['Total', '', brl(soma(doa) / 100)]) : vazio('Nenhuma doação lançada. Lance como receita com a categoria "doação".'))
+      + (outras ? `<p class="suave">Outras receitas do mês, fora de mensalidade e doação: ${brl(outras / 100)}.</p>` : '')
+      + sec('Saídas do mês', des.length ? tbl(['Data', 'Descrição', 'Categoria', 'Valor'], des.map(r => [dataBR(r.data), esc(r.descricao), esc(r.categoria || ''), brl(r.valor)]), [3], ['Total', '', '', brl(soma(des) / 100)]) : vazio('Nenhuma saída lançada no mês.'))
+      + sec('Estoque (posição de hoje)', es.data.length ? tbl(['Item', 'Quantidade', 'Mínimo', 'Situação'], es.data.map(r => [esc(r.item), un(r), qtd(r.minimo), baixo(r) ? '<span class="t-des">Repor</span>' : 'Ok']), [1, 2]) : vazio('Nenhum item no estoque.'))
+      + sec('Lista de compras', es.data.filter(baixo).length ? tbl(['Item', 'Atual', 'Mínimo', 'Falta para o mínimo'], es.data.filter(baixo).map(r => [esc(r.item), un(r), qtd(r.minimo), qtd(Math.max(Number(r.minimo) - Number(r.quantidade), 0))]), [1, 2, 3]) : vazio('Nenhum item abaixo do mínimo.'));
+  };
+  $('#mesRef').oninput = carregar;
+  carregar();
+}
+
 /* ---------- Rotas e início ---------- */
 
 const ROTAS = {
@@ -900,7 +1167,11 @@ const ROTAS = {
   'admin/eventos': () => viewCrud(CFG.eventos),
   'admin/membros': viewMembros,
   'admin/financeiro': () => viewCrud(CFG.lancamentos),
-  'admin/estoque': () => viewCrud(CFG.estoque)
+  'admin/estoque': () => viewCrud(CFG.estoque),
+  'admin/estoque/historico': viewHistorico,
+  'admin/estoque/inventario': viewInventario,
+  'admin/relatorios': () => viewRelSemanal(),
+  'admin/relatorios/mensal': viewRelMensal
 };
 
 async function rotear() {
