@@ -140,6 +140,176 @@ h1,h2{color:var(--verde)}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>window.supabase || document.write('<script src="https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"><\/script>');</script>
 <script>
+(function (raiz) {
+  'use strict';
+
+  var SIGNOS = ['Áries', 'Touro', 'Gêmeos', 'Câncer', 'Leão', 'Virgem', 'Libra', 'Escorpião', 'Sagitário', 'Capricórnio', 'Aquário', 'Peixes'];
+
+  var DECANATOS = {
+    'Áries': ['Ogum', 'Oxalá', 'Xangô'],
+    'Touro': ['Oxóssi', 'Yori', 'Yorimá'],
+    'Gêmeos': ['Yori', 'Oxóssi', 'Yorimá'],
+    'Câncer': ['Yemanjá', 'Ogum', 'Xangô'],
+    'Leão': ['Oxalá', 'Xangô', 'Ogum'],
+    'Virgem': ['Yori', 'Yorimá', 'Oxóssi'],
+    'Libra': ['Oxóssi', 'Yorimá', 'Yori'],
+    'Escorpião': ['Ogum', 'Xangô', 'Yemanjá'],
+    'Sagitário': ['Xangô', 'Ogum', 'Oxalá'],
+    'Capricórnio': ['Yorimá', 'Oxóssi', 'Yori'],
+    'Aquário': ['Yorimá', 'Yori', 'Oxóssi'],
+    'Peixes': ['Xangô', 'Yemanjá', 'Ogum']
+  };
+
+  var HORAS = [[3, 6, 'Ogum'], [6, 9, 'Oxóssi'], [9, 12, 'Oxalá'], [12, 15, 'Yori'], [15, 18, 'Xangô'], [18, 21, 'Yemanjá'], [21, 24, 'Yorimá'], [0, 3, 'Exu']];
+
+  var FAIXAS_ASC = [[6, 8], [8, 10], [10, 12], [12, 14], [14, 16], [16, 18], [18, 20], [20, 22], [22, 24], [0, 2], [2, 4], [4, 6]];
+
+  var GUARDIOES = {
+    'Oxalá': '7 Encruzilhadas',
+    'Ogum': 'Tranca Ruas',
+    'Oxóssi': 'Marabô',
+    'Xangô': 'Gira Mundo',
+    'Yorimá': 'Pinga Fogo',
+    'Yori': 'Tiriri',
+    'Yemanjá': 'Pombagira'
+  };
+
+  var FUSO_PADRAO = 'America/Sao_Paulo';
+  var DIA_MS = 86400000;
+
+  function partesLocais(ms, fuso) {
+    var p = new Intl.DateTimeFormat('en-CA', {
+      timeZone: fuso, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    }).formatToParts(new Date(ms));
+    var o = {};
+    p.forEach(function (x) { if (x.type !== 'literal') o[x.type] = parseInt(x.value, 10); });
+    return { ano: o.year, mes: o.month, dia: o.day, hora: o.hour, min: o.minute, seg: o.second };
+  }
+
+  function localParaUTC(ano, mes, dia, hora, min, seg, fuso) {
+    var alvo = Date.UTC(ano, mes - 1, dia, hora, min, seg);
+    var ms = alvo;
+    for (var i = 0; i < 4; i++) {
+      var p = partesLocais(ms, fuso);
+      var lido = Date.UTC(p.ano, p.mes - 1, p.dia, p.hora, p.min, p.seg);
+      var erro = lido - alvo;
+      if (erro === 0) break;
+      ms -= erro;
+    }
+    return ms;
+  }
+
+  function longitudeSol(ms) {
+    var jd = ms / DIA_MS + 2440587.5;
+    var T = (jd - 2451545.0) / 36525;
+    var rad = Math.PI / 180;
+    var L0 = 280.46646 + 36000.76983 * T + 0.0003032 * T * T;
+    var M = 357.52911 + 35999.05029 * T - 0.0001537 * T * T;
+    var C = (1.914602 - 0.004817 * T - 0.000014 * T * T) * Math.sin(M * rad)
+          + (0.019993 - 0.000101 * T) * Math.sin(2 * M * rad)
+          + 0.000289 * Math.sin(3 * M * rad);
+    var verdadeira = L0 + C;
+    var omega = 125.04 - 1934.136 * T;
+    var aparente = verdadeira - 0.00569 - 0.00478 * Math.sin(omega * rad);
+    return ((aparente % 360) + 360) % 360;
+  }
+
+  function indiceSigno(ms) {
+    return Math.floor(longitudeSol(ms) / 30) % 12;
+  }
+
+  function instanteInicioSigno(ms, indice) {
+    var alvo = indice * 30;
+    function f(t) { return ((longitudeSol(t) - alvo + 540) % 360) - 180; }
+    var lo = ms - 32 * DIA_MS;
+    var hi = ms;
+    for (var i = 0; i < 50; i++) {
+      var meio = (lo + hi) / 2;
+      if (f(meio) < 0) lo = meio; else hi = meio;
+    }
+    return hi;
+  }
+
+  function orixaDaHora(hora, min) {
+    var x = hora + min / 60;
+    for (var i = 0; i < HORAS.length; i++) {
+      var r = HORAS[i];
+      if (r[0] < r[1] && x >= r[0] && x < r[1]) return r[2];
+      if (r[0] > r[1] && (x >= r[0] || x < r[1])) return r[2];
+    }
+    return '';
+  }
+
+  function indiceAscendente(hora, min) {
+    var x = hora + min / 60;
+    for (var i = 0; i < FAIXAS_ASC.length; i++) {
+      if (x >= FAIXAS_ASC[i][0] && x < FAIXAS_ASC[i][1]) return i;
+    }
+    return -1;
+  }
+
+  function dataValida(ano, mes, dia) {
+    var d = new Date(Date.UTC(ano, mes - 1, dia));
+    return d.getUTCFullYear() === ano && d.getUTCMonth() === mes - 1 && d.getUTCDate() === dia;
+  }
+
+  function calcular(entrada, opcoes) {
+    opcoes = opcoes || {};
+    var virada = String(opcoes.virada || 'HORA').toUpperCase();
+    var fuso = opcoes.fuso || FUSO_PADRAO;
+    if (virada !== 'HORA' && virada !== 'DIA') throw new Error('virada deve ser HORA ou DIA');
+
+    var ano = entrada.ano, mes = entrada.mes, dia = entrada.dia;
+    var hora = entrada.hora, min = entrada.minuto;
+    if (!dataValida(ano, mes, dia)) throw new Error('Data inválida');
+    if (!(hora >= 0 && hora <= 23 && min >= 0 && min <= 59)) throw new Error('Hora inválida');
+
+    var nascimentoMs = localParaUTC(ano, mes, dia, hora, min, 0, fuso);
+    var referenciaMs = virada === 'HORA' ? nascimentoMs : localParaUTC(ano, mes, dia, 23, 59, 59, fuso);
+
+    var idx = indiceSigno(referenciaMs);
+    var signo = SIGNOS[idx];
+
+    var inicioMs = instanteInicioSigno(referenciaMs, idx);
+    var ini = partesLocais(inicioMs, fuso);
+    var deslocamento = Math.round((Date.UTC(ano, mes - 1, dia) - Date.UTC(ini.ano, ini.mes - 1, ini.dia)) / DIA_MS);
+    var decanato = Math.max(1, Math.min(3, Math.floor(deslocamento / 10) + 1));
+
+    var nascimento = DECANATOS[signo][decanato - 1];
+    var oHora = orixaDaHora(hora, min);
+    var iAsc = indiceAscendente(hora, min);
+    var signoAsc = SIGNOS[(idx + iAsc) % 12];
+    var ascendente = DECANATOS[signoAsc][0];
+
+    return {
+      signo: signo,
+      decanato: decanato,
+      nascimento: nascimento,
+      hora: oHora,
+      ascendente: ascendente,
+      signoAscendente: signoAsc,
+      guardiao: GUARDIOES[nascimento] || 'Não definido na tabela',
+      inicioDoSigno: ini.ano + '-' + String(ini.mes).padStart(2, '0') + '-' + String(ini.dia).padStart(2, '0'),
+      virada: virada
+    };
+  }
+
+  var api = {
+    calcular: calcular,
+    longitudeSol: longitudeSol,
+    instanteInicioSigno: instanteInicioSigno,
+    localParaUTC: localParaUTC,
+    tabelas: { SIGNOS: SIGNOS, DECANATOS: DECANATOS, HORAS: HORAS, GUARDIOES: GUARDIOES }
+  };
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  raiz.CoroaCalculo = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
 const CONFIG = {
   nome: 'Terreiro de Umbanda PAI JACÓ DE ARUANDA',
   url: 'https://lfyyjbrnbhhrdlyfrxmh.supabase.co',
@@ -270,7 +440,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
-  if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivo terreiro_novidades.sql).';
+  if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql e terreiro_coroa.sql).';
   return m;
 }
 
@@ -789,15 +959,37 @@ function resumoPessoa(m) {
   return f.join(' · ');
 }
 
+const FUSO_NASC = 'America/Sao_Paulo';
+
+async function viradaCoroa() {
+  const {data, error} = await sb.from('configuracoes').select('valor').eq('chave', 'coroa_virada').maybeSingle();
+  return !error && data && data.valor === 'DIA' ? 'DIA' : 'HORA';
+}
+
+function calcularCoroa(nasc, hora, virada) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(nasc || ''), h = /^(\d{2}):(\d{2})/.exec(hora || '');
+  if (!m || !h) return null;
+  try {
+    return CoroaCalculo.calcular({ano: +m[1], mes: +m[2], dia: +m[3], hora: +h[1], minuto: +h[2]}, {virada, fuso: FUSO_NASC});
+  } catch (e) { return null; }
+}
+
 async function viewMembros() {
   const T = TERMOS;
   app.innerHTML = abas('#/admin/membros') + `<div id="alertaPres"></div><div class="cab"><h1>Membros</h1><button class="btn" id="novo">Novo cadastro</button></div>
     <p class="suave">Cadastro único de todas as pessoas da casa: administradores, médiuns e consulentes. O acesso ao site segue o tipo do cadastro.</p>
+    <div class="ajuda" id="cfgCoroa"><label for="cfgVirada" style="margin:0 0 .25rem">Coroa mediúnica: virada de signo</label><select id="cfgVirada" style="max-width:360px"><option value="HORA">Pela hora do nascimento</option><option value="DIA">Pelo dia inteiro (o dia da virada já é o signo novo)</option></select><small style="display:block;margin-top:.3rem">Vale para os próximos cálculos. Coroas já gravadas só mudam se forem recalculadas na ficha do médium.</small></div>
     <div id="contas"></div>
     <div class="filtros"><input id="busca" type="search" placeholder="Buscar por nome ou telefone" aria-label="Buscar">
     <select id="ftipo" aria-label="Filtrar por tipo" style="max-width:200px"><option value="">Todos os tipos</option>${Object.entries(T.tipos).map(([k, v]) => `<option value="${k}">${esc(v.r)}</option>`).join('')}</select></div>
     <div id="lista"><p class="vazio">Carregando…</p></div>`;
   preencherAlerta();
+  viradaCoroa().then(v => { $('#cfgVirada').value = v; });
+  $('#cfgVirada').onchange = async ev => {
+    const {error} = await sb.from('configuracoes').upsert({chave: 'coroa_virada', valor: ev.target.value, atualizado_em: new Date().toISOString()}, {onConflict: 'chave'});
+    if (error) { aviso(msgErro(error), true); viradaCoroa().then(v => { $('#cfgVirada').value = v; }); return; }
+    aviso('Regra da virada de signo salva.');
+  };
   let linhas = [], contas = [];
   const desenhar = () => {
     $('#contas').innerHTML = contas.length
@@ -847,6 +1039,7 @@ async function abrirFormMembro(row, pre, aoSalvar) {
   ]);
   const usados = new Set((ms.data || []).map(x => x.usuario_id));
   const contasLivres = (pf.data || []).filter(p => !usados.has(p.id) || p.id === r.usuario_id);
+  const virada = await viradaCoroa();
   const pick = (o, ks) => Object.fromEntries(ks.map(k => [k, o[k]]));
   const grupo = (nome, itens, marcados, tipo) => Object.entries(itens).map(([k, v]) =>
     `<label class="chk op"><input type="${tipo || 'checkbox'}" name="${nome}" value="${k}"${marcados.includes(k) ? ' checked' : ''}><span><strong>${esc(v.r)}</strong><small>${esc(v.d)}</small></span></label>`).join('');
@@ -869,6 +1062,9 @@ async function abrirFormMembro(row, pre, aoSalvar) {
     <div class="sec-m" id="sec_consulente" hidden><h3>Função</h3>${grupo('f_con', pick(T.funcoes, ['contribuinte', 'nao_contribuinte']), f, 'radio')}</div>
     <label for="m_tel">Telefone</label><input id="m_tel" type="tel" value="${esc(r.telefone || '')}" inputmode="tel">
     <label for="m_nasc">Data de nascimento</label><input id="m_nasc" type="date" value="${esc(r.nascimento || '')}">
+    <div id="horaWrap" hidden><label for="m_hora">Hora de nascimento</label><input id="m_hora" type="time" value="${esc(String(r.hora_nascimento || '').slice(0, 5))}"></div>
+    <div class="sec-m" id="coroaBloco" hidden><h3>Coroa mediúnica (calculada)</h3><div id="coroaTxt"></div>
+      <label class="chk op" id="coroaRecalcL" hidden><input type="checkbox" id="m_recalc"><span><strong>Recalcular agora</strong><small>O resultado gravado difere do cálculo com a regra atual. Marque e salve para atualizar a coroa deste médium.</small></span></label></div>
     <label for="m_entr">Data de entrada na casa</label><input id="m_entr" type="date" value="${esc(r.data_entrada || '')}">
     <label for="m_obs">Observações (internas)</label><textarea id="m_obs">${esc(r.observacoes || '')}</textarea>
     <label for="m_conta">Conta de acesso ao site</label>
@@ -880,9 +1076,35 @@ async function abrirFormMembro(row, pre, aoSalvar) {
     const t = $('#m_tipo').value, g = $('#m_grau').value;
     $('#exTipo').textContent = t ? T.tipos[t].d : 'Escolha o tipo de cadastro para ver as opções.';
     ['administrador', 'medium', 'consulente'].forEach(k => { $('#sec_' + k).hidden = k !== t; });
+    $('#horaWrap').hidden = $('#coroaBloco').hidden = t !== 'medium';
     $('#exGrau').textContent = g ? T.graus[g].d : 'Escolha o grau para ver a explicação.';
   };
   $('#m_tipo').onchange = atualizar; $('#m_grau').onchange = atualizar; atualizar();
+  const coroaEstado = () => {
+    const nasc = $('#m_nasc').value, hora = $('#m_hora').value;
+    const nova = calcularCoroa(nasc, hora, virada);
+    const g = row && row.coroa_calculo;
+    const mesma = !!(g && row.nascimento === nasc && String(row.hora_nascimento || '').slice(0, 5) === hora);
+    const gravada = mesma ? g : null;
+    const chaves = ['signo', 'decanato', 'nascimento', 'hora', 'ascendente', 'guardiao'];
+    const difere = !!(gravada && nova && chaves.some(k => gravada[k] !== nova[k]));
+    const usar = (gravada && !(difere && $('#m_recalc').checked)) ? gravada : nova;
+    return {nova, gravada, difere, usar};
+  };
+  const desenharCoroa = () => {
+    const el = $('#coroaTxt'), {nova, gravada, difere, usar} = coroaEstado();
+    $('#coroaRecalcL').hidden = !difere;
+    if (!usar) { el.innerHTML = '<p class="ajuda">Preencha a data e a hora de nascimento para calcular.</p>'; return; }
+    const linhas = [['Signo', `${usar.signo} · ${usar.decanato}º decanato`], ['Orixá de nascimento', usar.nascimento], ['Orixá da hora', usar.hora], ['Orixá ascendente', usar.ascendente], ['Exu guardião', usar.guardiao]];
+    let nota = '';
+    if (usar === gravada) {
+      nota = `Resultado gravado em ${dataBR(gravada.calculadoEm)} (virada de signo ${gravada.virada === 'DIA' ? 'pelo dia' : 'pela hora'}).`;
+      if (difere) nota += ` Com a regra atual, seria: Orixá de nascimento ${nova.nascimento}, da hora ${nova.hora}, ascendente ${nova.ascendente}, guardião ${nova.guardiao}.`;
+    } else nota = 'Será gravado ao salvar o cadastro.';
+    el.innerHTML = `<div class="rolagem"><table><tbody>${linhas.map(([k, v]) => `<tr><th scope="row">${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table></div><p class="ajuda">${esc(nota)}</p>`;
+  };
+  ['m_nasc', 'm_hora', 'm_recalc'].forEach(i => { $('#' + i).addEventListener('input', desenharCoroa); $('#' + i).addEventListener('change', desenharCoroa); });
+  desenharCoroa();
   d.showModal();
   $('#m_nome').focus();
   $('#cancelar').onclick = () => d.close();
@@ -898,7 +1120,9 @@ async function abrirFormMembro(row, pre, aoSalvar) {
     if (tipo === 'medium') { funcoes = [...marc('f_med'), ...marc('f_cargo')]; grau = $('#m_grau').value ? Number($('#m_grau').value) : null; acesso = $('#m_acesso').checked; }
     if (tipo === 'consulente') { funcoes = marc('f_con'); if (!funcoes.length) { erro('Escolha a função: contribuinte ou não contribuinte.'); return; } }
     const v = id => $(id).value.trim() || null;
-    const obj = {nome, tipo, funcoes, grau, acesso_admin: acesso, telefone: v('#m_tel'), nascimento: v('#m_nasc'), data_entrada: v('#m_entr'), observacoes: v('#m_obs'), usuario_id: $('#m_conta').value || null};
+    let coroa = null;
+    if (tipo === 'medium') { const e = coroaEstado(); coroa = e.usar ? (e.usar === e.gravada ? e.gravada : {...e.usar, calculadoEm: new Date().toISOString()}) : null; }
+    const obj = {nome, tipo, funcoes, grau, acesso_admin: acesso, telefone: v('#m_tel'), nascimento: v('#m_nasc'), hora_nascimento: tipo === 'medium' ? v('#m_hora') : null, coroa_calculo: coroa, data_entrada: v('#m_entr'), observacoes: v('#m_obs'), usuario_id: $('#m_conta').value || null};
     const btn = $('#salvar'); btn.disabled = true; erro('');
     const res = novo ? await sb.from('membros').insert(obj).select() : await sb.from('membros').update(obj).eq('id', row.id).select();
     if (res.error || !res.data || !res.data.length) { erro(res.error ? msgErro(res.error) : 'Não foi possível salvar.'); btn.disabled = false; return; }
