@@ -440,7 +440,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
-  if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql e terreiro_coroa.sql).';
+  if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql, terreiro_coroa.sql e terreiro_questionarios.sql).';
   return m;
 }
 
@@ -455,6 +455,7 @@ async function carregarPerfil() {
 function desenharNav() {
   const adm = perfil && perfil.papel === 'admin';
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
+    + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
     + (adm ? '<a href="#/admin/noticias">Painel</a>' : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
@@ -708,7 +709,7 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios']];
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação']];
 const abas = atual => '<div class="abas">' + ABAS.map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin() {
@@ -717,7 +718,7 @@ function exigirAdmin() {
   return true;
 }
 
-const TIPOS_EV = {gira:'Gira', reuniao:'Reunião', festa:'Festa / evento', outro:'Outro'};
+const TIPOS_EV = {gira:'Gira', reuniao:'Reunião', festa:'Festa / evento', iniciacao:'Iniciação', outro:'Outro'};
 const CFG = {
   noticias: {
     aba:'#/admin/noticias', tabela:'noticias', titulo:'Notícias', singular:'notícia', botao:'Nova notícia',
@@ -755,7 +756,7 @@ const CFG = {
     campos:[
       {k:'titulo', r:'Título', tipo:'text', req:true},
       {k:'data_hora', r:'Data e hora', tipo:'datetime', req:true},
-      {k:'tipo', r:'Tipo de evento', tipo:'select', req:true, padrao:'gira', opcoes:[{v:'gira', t:'Gira'}, {v:'reuniao', t:'Reunião'}, {v:'festa', t:'Festa / evento'}, {v:'outro', t:'Outro'}]},
+      {k:'tipo', r:'Tipo de evento', tipo:'select', req:true, padrao:'gira', opcoes:[{v:'gira', t:'Gira'}, {v:'reuniao', t:'Reunião'}, {v:'festa', t:'Festa / evento'}, {v:'iniciacao', t:'Iniciação'}, {v:'outro', t:'Outro'}]},
       {k:'local', r:'Local', tipo:'text'},
       {k:'descricao', r:'Descrição', tipo:'textarea'},
       {k:'imagem_path', r:'Imagem (opcional)', tipo:'imagem', pasta:'eventos'},
@@ -1383,6 +1384,323 @@ async function viewRelMensal() {
   carregar();
 }
 
+/* ---------- Questionários, entregas e situação dos médiuns ---------- */
+
+const SUBQ = [['#/admin/questionarios', 'Questionários'], ['#/admin/questionarios/entregas', 'Entregues e notas']];
+const DIA_VENC = 15;
+const JANELA_GIRAS = 60;
+const novaPerg = () => ({id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), tipo: 'texto', texto: '', opcoes: []});
+const prazoTxt = q => q.prazo ? dataHoraBR(q.prazo) : 'Sem prazo';
+const vencido = q => !!q.prazo && new Date(q.prazo) < new Date();
+const fmtNota = n => String(n).replace('.', ',');
+const temNota = r => !!r && r.nota !== null && r.nota !== undefined;
+const respostaHtml = (q, r) => (q.perguntas || []).map((p, i) => {
+  const v = r && r.respostas ? r.respostas[p.id] : '';
+  return `<p><strong>${i + 1}. ${esc(p.texto)}</strong><br>${v ? texto(v) : '<span class="suave">(sem resposta)</span>'}</p>`;
+}).join('');
+
+function sitMed(r) {
+  const dia = Number(hoje().slice(8, 10));
+  const ativ = r.ativ_atrasadas === 0, giras = r.faltas === 0, mens = r.mensalidade_paga || dia <= DIA_VENC;
+  return {
+    ativ, giras, mens,
+    tAtiv: ativ ? (r.ativ_pendentes ? `Em dia (${r.ativ_pendentes} a entregar no prazo)` : 'Em dia') : `${r.ativ_atrasadas} atrasada(s)`,
+    tGiras: giras ? 'Em dia' : `${r.faltas} falta(s) sem justificativa`,
+    tMens: r.mensalidade_paga ? 'Paga' : (dia <= DIA_VENC ? `A vencer (até o dia ${DIA_VENC})` : 'Em atraso')
+  };
+}
+
+async function carregarSituacao() {
+  const agora = new Date().toISOString();
+  const [s, f, i] = await Promise.all([
+    sb.rpc('painel_situacao'),
+    sb.from('eventos').select('*').eq('tipo', 'festa').gte('data_hora', agora).order('data_hora').limit(1),
+    sb.from('eventos').select('*').eq('tipo', 'iniciacao').gte('data_hora', agora).order('data_hora').limit(1)
+  ]);
+  return {s, f, i};
+}
+
+function blocoProximos(f, i) {
+  const bloco = (t, r, vazio) => `<section class="cartao"><h2>${t}</h2>${r.error ? `<p class="erro">${esc(msgErro(r.error))}</p>` : r.data.length ? blocoEvento(r.data[0], null) : `<p class="vazio">${vazio}</p>`}</section>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-bottom:1rem">${bloco('Próxima festa', f, 'Nenhuma festa agendada. Cadastre em Eventos com o tipo "Festa / evento".')}${bloco('Próxima iniciação', i, 'Nenhuma iniciação agendada. Cadastre em Eventos com o tipo "Iniciação".')}</div>`;
+}
+
+/* ----- Painel do administrador: situação de todos os médiuns ----- */
+
+async function viewSituacao() {
+  app.innerHTML = abas('#/admin/situacao') + `<div class="cab"><h1>Situação dos médiuns</h1><button class="btn sec" onclick="window.print()">Imprimir</button></div>
+    <p class="suave">Atividades: nenhum questionário vencido sem entrega. Giras: nenhuma falta sem justificativa nos últimos ${JANELA_GIRAS} dias. Mensalidade: paga neste mês ou ainda dentro do prazo (dia ${DIA_VENC}).</p><div id="corpo"><p class="vazio">Carregando…</p></div>`;
+  const {s, f, i} = await carregarSituacao();
+  if (s.error) { $('#corpo').innerHTML = `<p class="erro">${esc(msgErro(s.error))}</p>`; return; }
+  const linhas = s.data.map(r => ({r, st: sitMed(r)})), n = linhas.length;
+  const tot = k => linhas.filter(x => x.st[k]).length;
+  const card = (t, k) => `<div><span>${t}</span><strong class="${tot(k) === n ? 'ok' : 'neg'}">${tot(k)} de ${n}</strong></div>`;
+  const cel = (ok, t) => `<td class="${ok ? 'ok' : 'neg'}">${ok ? '✓ ' : '✗ '}${esc(t)}</td>`;
+  $('#corpo').innerHTML = (n ? `<div class="totais">${card('Em dia com atividades', 'ativ')}${card('Em dia com as giras', 'giras')}${card('Em dia com a mensalidade', 'mens')}</div>` : '')
+    + blocoProximos(f, i)
+    + (n ? `<div class="rolagem"><table><thead><tr><th>Médium</th><th>Atividades</th><th>Giras</th><th>Mensalidade</th></tr></thead><tbody>`
+      + linhas.map(({r, st}) => `<tr class="${st.ativ && st.giras && st.mens ? '' : 'alerta'}"><td>${esc(r.nome_membro)}</td>${cel(st.ativ, st.tAtiv)}${cel(st.giras, st.tGiras)}${cel(st.mens, st.tMens)}</tr>`).join('')
+      + '</tbody></table></div>' : '<p class="vazio">Nenhum médium cadastrado. Cadastre em Membros com o tipo "Médium".</p>');
+}
+
+/* ----- Administrador: criar e gerenciar questionários ----- */
+
+async function viewQuestionarios() {
+  app.innerHTML = abas('#/admin/questionarios') + sub(SUBQ, '#/admin/questionarios') + `<div class="cab"><h1>Questionários</h1><button class="btn" id="novo">Novo questionário</button></div>
+    <p class="suave">Atividades para os médiuns responderem. As respostas e as notas ficam só nesta conta de administrador.</p><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  let qs = [];
+  const carregar = async () => {
+    const [q, d, r] = await Promise.all([
+      sb.from('questionarios').select('*').order('criado_em', {ascending: false}),
+      sb.from('questionario_destinatarios').select('questionario_id,membro_id'),
+      sb.from('respostas_questionario').select('questionario_id,nota')
+    ]);
+    const er = q.error || d.error || r.error;
+    if (er) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
+    qs = q.data;
+    if (!qs.length) { $('#lista').innerHTML = '<p class="vazio">Nenhum questionário ainda. Toque em "Novo questionário", escreva as perguntas e escolha os médiuns.</p>'; return; }
+    $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Título</th><th>Prazo</th><th>Situação</th><th class="num">Destinatários</th><th class="num">Entregues</th><th class="num">Corrigidos</th><th></th></tr></thead><tbody>`
+      + qs.map(x => {
+        const dest = d.data.filter(y => y.questionario_id === x.id).length, rs = r.data.filter(y => y.questionario_id === x.id);
+        return `<tr><td>${esc(x.titulo)}</td><td>${esc(prazoTxt(x))}</td><td class="${x.publicado ? 'ok' : 'rasc'}">${x.publicado ? 'Publicado' : 'Rascunho'}</td><td class="num">${dest}</td><td class="num">${rs.length}</td><td class="num">${rs.filter(temNota).length}</td>
+          <td class="acoes"><button class="btn sec peq" data-a="e" data-id="${x.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${x.id}">Excluir</button></td></tr>`;
+      }).join('') + '</tbody></table></div>';
+  };
+  $('#novo').onclick = () => abrirFormQuest(null, carregar);
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const q = qs.find(x => String(x.id) === b.dataset.id); if (!q) return;
+    if (b.dataset.a === 'e') { abrirFormQuest(q, carregar); return; }
+    if (!(await confirmar(`Excluir "${q.titulo}"? As respostas e as notas deste questionário também serão apagadas. Esta ação não pode ser desfeita.`, 'Excluir questionário'))) return;
+    const {data, error} = await sb.from('questionarios').delete().eq('id', q.id).select();
+    if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
+    aviso('Excluído.'); carregar();
+  };
+  carregar();
+}
+
+async function abrirFormQuest(q, aoSalvar) {
+  const novo = !q;
+  const [mm, dd] = await Promise.all([
+    sb.from('membros').select('id,nome').eq('tipo', 'medium').order('nome'),
+    novo ? Promise.resolve({data: []}) : sb.from('questionario_destinatarios').select('membro_id').eq('questionario_id', q.id)
+  ]);
+  if (mm.error || dd.error) { aviso(msgErro(mm.error || dd.error), true); return; }
+  if (!mm.data.length) { aviso('Nenhum médium cadastrado. Cadastre em Membros com o tipo "Médium".', true); return; }
+  const inicial = new Set(dd.data.map(x => x.membro_id));
+  let perg = novo ? [novaPerg()] : (q.perguntas || []).map(p => ({...p}));
+  if (!perg.length) perg = [novaPerg()];
+  const d = $('#dlg'); d.onclick = null; d.onclose = null;
+  const desenharPerg = () => {
+    $('#qPerg').innerHTML = perg.map((p, i) => `<div class="sec-m qp" data-id="${esc(p.id)}"><h3>Pergunta ${i + 1}</h3>
+      <label for="qt_${esc(p.id)}">Enunciado *</label><textarea id="qt_${esc(p.id)}" class="qp-texto" style="min-height:70px">${esc(p.texto)}</textarea>
+      <label for="qy_${esc(p.id)}">Tipo de resposta</label><select id="qy_${esc(p.id)}" class="qp-tipo"><option value="texto"${p.tipo === 'texto' ? ' selected' : ''}>Resposta escrita</option><option value="escolha"${p.tipo === 'escolha' ? ' selected' : ''}>Múltipla escolha</option></select>
+      <div class="qp-opwrap"${p.tipo === 'escolha' ? '' : ' hidden'}><label for="qo_${esc(p.id)}">Opções (uma por linha)</label><textarea id="qo_${esc(p.id)}" class="qp-ops" style="min-height:90px">${esc((p.opcoes || []).join('\n'))}</textarea></div>
+      ${perg.length > 1 ? `<div class="rodape" style="margin-top:.6rem"><button type="button" class="btn perigo peq" data-qa="rm" data-i="${i}">Remover pergunta</button></div>` : ''}</div>`).join('');
+  };
+  const ler = () => {
+    perg = [...d.querySelectorAll('.qp')].map(el => ({
+      id: el.dataset.id, tipo: el.querySelector('.qp-tipo').value, texto: el.querySelector('.qp-texto').value.trim(),
+      opcoes: el.querySelector('.qp-ops').value.split('\n').map(s => s.trim()).filter(Boolean)
+    }));
+  };
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${novo ? 'Novo questionário' : 'Editar questionário'}</h2>
+    <label for="q_tit">Título *</label><input id="q_tit" maxlength="150" value="${esc(q ? q.titulo : '')}">
+    <label for="q_desc">Orientações (opcional)</label><textarea id="q_desc" style="min-height:70px">${esc(q && q.descricao ? q.descricao : '')}</textarea>
+    <label for="q_prazo">Prazo de entrega (opcional)</label><input id="q_prazo" type="datetime-local" value="${q && q.prazo ? paraLocal(q.prazo) : ''}">
+    <label class="chk"><input type="checkbox" id="q_pub"${!q || q.publicado ? ' checked' : ''}>Publicar para os médiuns agora (desmarque para deixar como rascunho)</label>
+    <h3 style="margin-top:1rem">Perguntas</h3><div id="qPerg"></div>
+    <button type="button" class="btn sec peq" data-qa="add" style="margin-top:.6rem">+ Adicionar pergunta</button>
+    <h3 style="margin-top:1rem">Quem deve responder *</h3>
+    <button type="button" class="btn sec peq" data-qa="todos">Marcar todos</button> <button type="button" class="btn sec peq" data-qa="nenhum">Desmarcar todos</button>
+    <div id="qDest">${mm.data.map(m => `<label class="chk op"><input type="checkbox" name="q_dest" value="${m.id}"${inicial.has(m.id) ? ' checked' : ''}><span>${esc(m.nome)}</span></label>`).join('')}</div>
+    <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar questionário</button></div></form>`;
+  desenharPerg();
+  d.showModal();
+  $('#q_tit').focus();
+  $('#cancelar').onclick = () => d.close();
+  const erro = t => { $('#erroF').textContent = t; };
+  d.onchange = e => {
+    const s = e.target.closest('.qp-tipo'); if (!s) return;
+    s.closest('.qp').querySelector('.qp-opwrap').hidden = s.value !== 'escolha';
+  };
+  d.onclick = e => {
+    const b = e.target.closest('button[data-qa]'); if (!b) return;
+    const a = b.dataset.qa;
+    if (a === 'add') { ler(); perg.push(novaPerg()); desenharPerg(); const ult = d.querySelectorAll('.qp-texto'); ult[ult.length - 1].focus(); }
+    else if (a === 'rm') { ler(); perg.splice(Number(b.dataset.i), 1); desenharPerg(); }
+    else if (a === 'todos' || a === 'nenhum') d.querySelectorAll('input[name=q_dest]').forEach(c => { c.checked = a === 'todos'; });
+  };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    ler();
+    const titulo = $('#q_tit').value.trim();
+    if (!titulo) { erro('Preencha o título.'); $('#q_tit').focus(); return; }
+    for (let i = 0; i < perg.length; i++) {
+      if (!perg[i].texto) { erro(`Escreva o enunciado da pergunta ${i + 1}.`); return; }
+      if (perg[i].tipo === 'escolha' && perg[i].opcoes.length < 2) { erro(`A pergunta ${i + 1} precisa de pelo menos 2 opções.`); return; }
+    }
+    const marcados = new Set([...d.querySelectorAll('input[name=q_dest]:checked')].map(c => Number(c.value)));
+    if (!marcados.size) { erro('Marque pelo menos um médium.'); return; }
+    const pz = $('#q_prazo').value;
+    const obj = {titulo, descricao: $('#q_desc').value.trim() || null, prazo: pz ? new Date(pz).toISOString() : null, publicado: $('#q_pub').checked,
+      perguntas: perg.map(p => ({id: p.id, tipo: p.tipo, texto: p.texto, opcoes: p.tipo === 'escolha' ? p.opcoes : []}))};
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const res = novo ? await sb.from('questionarios').insert(obj).select() : await sb.from('questionarios').update(obj).eq('id', q.id).select();
+    if (res.error || !res.data || !res.data.length) { erro(res.error ? msgErro(res.error) : 'Não foi possível salvar.'); btn.disabled = false; return; }
+    const qid = res.data[0].id;
+    const add = [...marcados].filter(id => !inicial.has(id)), tirar = [...inicial].filter(id => !marcados.has(id));
+    let e2 = null;
+    if (add.length) e2 = (await sb.from('questionario_destinatarios').insert(add.map(id => ({questionario_id: qid, membro_id: id})))).error;
+    if (!e2 && tirar.length) e2 = (await sb.from('questionario_destinatarios').delete().eq('questionario_id', qid).in('membro_id', tirar)).error;
+    if (e2) { erro('O questionário foi salvo, mas a lista de médiuns falhou: ' + msgErro(e2)); btn.disabled = false; return; }
+    d.onchange = null; d.close(); aviso('Salvo.'); aoSalvar();
+  };
+}
+
+/* ----- Administrador: entregues e notas ----- */
+
+async function viewEntregas() {
+  app.innerHTML = abas('#/admin/questionarios') + sub(SUBQ, '#/admin/questionarios/entregas') + `<div class="cab"><h1>Entregues e notas</h1></div>
+    <div class="filtros"><select id="fq" aria-label="Questionário" style="max-width:280px"><option value="">Todos os questionários</option></select>
+    <select id="fs" aria-label="Situação" style="max-width:210px"><option value="">Todas as situações</option><option value="entregue">Aguardando nota</option><option value="corrigida">Corrigidas</option><option value="pendente">Não entregues</option></select></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  let qs = [], linhas = [];
+  const desenhar = () => {
+    const fq = $('#fq').value, fs = $('#fs').value;
+    const rs = linhas.filter(x => (!fq || String(x.q.id) === fq) && (!fs || x.st === fs));
+    if (!linhas.length) { $('#lista').innerHTML = '<p class="vazio">Nada por aqui ainda. Crie um questionário na aba "Questionários".</p>'; return; }
+    if (!rs.length) { $('#lista').innerHTML = '<p class="vazio">Nada encontrado com esse filtro.</p>'; return; }
+    const rot = {pendente: 'Não entregue', entregue: 'Aguardando nota', corrigida: 'Corrigida'};
+    $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Questionário</th><th>Médium</th><th>Situação</th><th>Entregue em</th><th class="num">Nota</th><th></th></tr></thead><tbody>`
+      + rs.map((x, i) => `<tr><td>${esc(x.q.titulo)}</td><td>${esc(x.nome)}</td><td class="${x.st === 'corrigida' ? 'ok' : x.st === 'pendente' && vencido(x.q) ? 'neg' : ''}">${rot[x.st]}${x.st === 'pendente' && vencido(x.q) ? ' (atrasada)' : ''}</td>
+        <td>${x.r ? esc(dataHoraBR(x.r.enviada_em)) : ''}</td><td class="num">${temNota(x.r) ? fmtNota(x.r.nota) : ''}</td>
+        <td class="acoes">${x.r ? `<button class="btn peq" data-i="${linhas.indexOf(x)}">${x.st === 'corrigida' ? 'Rever' : 'Ver e dar nota'}</button>` : ''}</td></tr>`).join('')
+      + '</tbody></table></div>';
+  };
+  const carregar = async () => {
+    const [q, d, r, m] = await Promise.all([
+      sb.from('questionarios').select('*').order('criado_em', {ascending: false}),
+      sb.from('questionario_destinatarios').select('questionario_id,membro_id'),
+      sb.from('respostas_questionario').select('*'),
+      sb.from('membros').select('id,nome')
+    ]);
+    const er = q.error || d.error || r.error || m.error;
+    if (er) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
+    qs = q.data;
+    const nomes = {}; m.data.forEach(x => { nomes[x.id] = x.nome; });
+    const sel = $('#fq'), atual = sel.value;
+    sel.innerHTML = '<option value="">Todos os questionários</option>' + qs.map(x => `<option value="${x.id}">${esc(x.titulo)}</option>`).join('');
+    sel.value = atual;
+    linhas = [];
+    qs.forEach(x => d.data.filter(y => y.questionario_id === x.id).map(y => ({q: x, nome: nomes[y.membro_id] || '(removido)', r: r.data.find(z => z.questionario_id === x.id && z.membro_id === y.membro_id) || null}))
+      .sort((a, b) => a.nome.localeCompare(b.nome)).forEach(y => { y.st = y.r ? (temNota(y.r) ? 'corrigida' : 'entregue') : 'pendente'; linhas.push(y); }));
+    desenhar();
+  };
+  $('#fq').onchange = desenhar; $('#fs').onchange = desenhar;
+  $('#lista').onclick = ev => {
+    const b = ev.target.closest('button[data-i]'); if (!b) return;
+    const x = linhas[Number(b.dataset.i)]; if (x && x.r) abrirCorrecao(x.q, x.nome, x.r, carregar);
+  };
+  carregar();
+}
+
+function abrirCorrecao(q, nome, r, aoSalvar) {
+  const d = $('#dlg'); d.onclick = null; d.onclose = null; d.onchange = null;
+  const fora = q.prazo && new Date(r.enviada_em) > new Date(q.prazo);
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${esc(q.titulo)}</h2><p class="suave">Médium: ${esc(nome)} · entregue em ${esc(dataHoraBR(r.enviada_em))}${fora ? ' (fora do prazo)' : ''}</p>${respostaHtml(q, r)}
+    <label for="n_nota">Nota (0 a 10) *</label><input id="n_nota" type="number" min="0" max="10" step="0.1" inputmode="decimal" value="${temNota(r) ? esc(r.nota) : ''}">
+    <label for="n_com">Comentário (o médium vê)</label><textarea id="n_com" style="min-height:90px">${esc(r.comentario || '')}</textarea>
+    <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar nota</button></div></form>`;
+  d.showModal(); $('#n_nota').focus();
+  $('#cancelar').onclick = () => d.close();
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const v = parseFloat($('#n_nota').value);
+    if (isNaN(v) || v < 0 || v > 10) { $('#erroF').textContent = 'Informe uma nota entre 0 e 10.'; $('#n_nota').focus(); return; }
+    const btn = $('#salvar'); btn.disabled = true;
+    const {data, error} = await sb.from('respostas_questionario').update({nota: v, comentario: $('#n_com').value.trim() || null}).eq('id', r.id).select();
+    if (error || !data || !data.length) { $('#erroF').textContent = error ? msgErro(error) : 'Não foi possível salvar a nota.'; btn.disabled = false; return; }
+    d.close(); aviso('Nota salva.'); aoSalvar();
+  };
+}
+
+/* ----- Médium: situação própria e atividades ----- */
+
+function abrirResposta(q, r, aoSalvar) {
+  const d = $('#dlg'); d.onclick = null; d.onclose = null; d.onchange = null;
+  if (temNota(r)) {
+    d.innerHTML = `<h2 id="dlgT">${esc(q.titulo)}</h2><p>Sua nota: <strong>${fmtNota(r.nota)}</strong> de 10</p>${r.comentario ? `<div class="ajuda">${texto(r.comentario)}</div>` : ''}${respostaHtml(q, r)}<div class="rodape"><button class="btn" id="fechar" type="button">Fechar</button></div>`;
+    d.showModal(); $('#fechar').onclick = () => d.close(); return;
+  }
+  const ant = r && r.respostas ? r.respostas : {};
+  const campo = (p, i) => p.tipo === 'escolha'
+    ? `<p style="margin:.9rem 0 .2rem"><strong>${i + 1}. ${esc(p.texto)}</strong></p>` + (p.opcoes || []).map(o => `<label class="chk op"><input type="radio" name="r_${esc(p.id)}" value="${esc(o)}"${ant[p.id] === o ? ' checked' : ''}><span>${esc(o)}</span></label>`).join('')
+    : `<label for="r_${esc(p.id)}">${i + 1}. ${esc(p.texto)}</label><textarea id="r_${esc(p.id)}">${esc(ant[p.id] || '')}</textarea>`;
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${esc(q.titulo)}</h2><p class="suave">${esc(prazoTxt(q) === 'Sem prazo' ? 'Sem prazo de entrega.' : 'Prazo: ' + prazoTxt(q))}${vencido(q) ? ' (já venceu, mas você ainda pode entregar)' : ''}</p>${q.descricao ? `<div class="ajuda">${texto(q.descricao)}</div>` : ''}
+    ${(q.perguntas || []).map(campo).join('')}<p class="erro" id="erroF" role="alert"></p>
+    <div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">${r ? 'Atualizar resposta' : 'Enviar resposta'}</button></div></form>`;
+  d.showModal();
+  $('#cancelar').onclick = () => d.close();
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const obj = {};
+    for (let i = 0; i < (q.perguntas || []).length; i++) {
+      const p = q.perguntas[i];
+      const v = p.tipo === 'escolha' ? (d.querySelector(`input[name="r_${p.id}"]:checked`) || {}).value : $('#r_' + p.id).value.trim();
+      if (!v) { $('#erroF').textContent = `Responda a pergunta ${i + 1}.`; return; }
+      obj[p.id] = v;
+    }
+    const btn = $('#salvar'); btn.disabled = true;
+    const {data, error} = await sb.from('respostas_questionario').upsert({questionario_id: q.id, membro_id: perfil.membro_id, respostas: obj}, {onConflict: 'questionario_id,membro_id'}).select();
+    if (error || !data || !data.length) { $('#erroF').textContent = error ? msgErro(error) : 'Não foi possível enviar.'; btn.disabled = false; return; }
+    d.close(); aviso('Resposta enviada.'); aoSalvar();
+  };
+}
+
+async function viewAtividades() {
+  if (!sessao || !perfil || !perfil.membro_id) {
+    app.innerHTML = '<div class="cartao estreito"><h1>Atividades</h1><p>Esta área é para médiuns com cadastro ligado à conta. Peça ao administrador para vincular o seu cadastro.</p></div>'; return;
+  }
+  app.innerHTML = '<h1>Atividades</h1><div id="corpo"><p class="vazio">Carregando…</p></div>';
+  let qs = [], rs = [];
+  const desenhar = async () => {
+    const [{s, f, i}, q, r, d] = await Promise.all([
+      carregarSituacao(),
+      sb.from('questionarios').select('*'),
+      sb.from('respostas_questionario').select('*').eq('membro_id', perfil.membro_id),
+      sb.from('questionario_destinatarios').select('questionario_id').eq('membro_id', perfil.membro_id)
+    ]);
+    const er = q.error || r.error || d.error;
+    if (er) { $('#corpo').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
+    const meus = new Set(d.data.map(x => x.questionario_id));
+    rs = r.data;
+    qs = q.data.filter(x => meus.has(x.id) && x.publicado);
+    const resp = id => rs.find(x => x.questionario_id === id);
+    qs.sort((a, b) => (resp(a.id) ? 1 : 0) - (resp(b.id) ? 1 : 0) || String(a.prazo || '9').localeCompare(String(b.prazo || '9')));
+    const me = !s.error && s.data.length ? s.data[0] : null, st = me ? sitMed(me) : null;
+    const cel = (t, ok, txt) => `<div><span>${t}</span><strong class="${ok ? 'ok' : 'neg'}">${ok ? '✓ ' : '✗ '}${esc(txt)}</strong></div>`;
+    const sit = s.error ? `<p class="erro">${esc(msgErro(s.error))}</p>` : me
+      ? `<h2>Minha situação</h2><div class="totais">${cel('Atividades', st.ativ, st.tAtiv)}${cel('Giras', st.giras, st.tGiras)}${cel('Mensalidade', st.mens, st.tMens)}</div>`
+      : '<p class="suave">Seu cadastro não está como médium, por isso a situação não aparece.</p>';
+    const status = x => {
+      const y = resp(x.id);
+      if (temNota(y)) return `<span class="ok">Corrigida · nota ${fmtNota(y.nota)}</span>`;
+      if (y) return '<span class="suave">Entregue, aguardando nota</span>';
+      return vencido(x) ? '<span class="neg">Atrasada</span>' : '<span class="pr-pend">Pendente</span>';
+    };
+    const lista = qs.length ? qs.map(x => { const y = resp(x.id); return `<div class="cartao" style="margin-bottom:.8rem"><div class="cab" style="margin:0"><div><h3>${esc(x.titulo)}</h3><span class="suave">Prazo: ${esc(prazoTxt(x))}</span><br>${status(x)}</div>
+      <button class="btn${y ? ' sec' : ''} peq" data-q="${x.id}">${temNota(y) ? 'Ver nota' : y ? 'Editar resposta' : 'Responder'}</button></div></div>`; }).join('')
+      : '<p class="vazio">Nenhum questionário para você no momento.</p>';
+    $('#corpo').innerHTML = sit + blocoProximos(f, i) + '<h2>Questionários</h2>' + lista;
+  };
+  $('#corpo').onclick = ev => {
+    const b = ev.target.closest('button[data-q]'); if (!b) return;
+    const q = qs.find(x => String(x.id) === b.dataset.q); if (!q) return;
+    abrirResposta(q, rs.find(x => x.questionario_id === q.id) || null, desenhar);
+  };
+  desenhar();
+}
+
 /* ---------- Rotas e início ---------- */
 
 const ROTAS = {
@@ -1395,7 +1713,11 @@ const ROTAS = {
   'admin/estoque/historico': viewHistorico,
   'admin/estoque/inventario': viewInventario,
   'admin/relatorios': () => viewRelSemanal(),
-  'admin/relatorios/mensal': viewRelMensal
+  'admin/relatorios/mensal': viewRelMensal,
+  'admin/questionarios': viewQuestionarios,
+  'admin/questionarios/entregas': viewEntregas,
+  'admin/situacao': viewSituacao,
+  'atividades': viewAtividades
 };
 
 async function rotear() {
