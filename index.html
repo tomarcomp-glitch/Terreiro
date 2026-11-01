@@ -312,6 +312,7 @@ h1,h2{color:var(--verde)}
 <script>
 const CONFIG = {
   nome: 'Terreiro de Umbanda PAI JACÓ DE ARUANDA',
+  dominioUsuario: 'terreiro.invalid',
   url: 'https://lfyyjbrnbhhrdlyfrxmh.supabase.co',
   chave: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmeXlqYnJuYmhocmRseWZyeG1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NTA0MDMsImV4cCI6MjEwODAyNjQwM30._dXqWTzkSDmVroTBTLtNpk09YRdj_wHozjfosmI2h2c'
 };
@@ -429,7 +430,7 @@ function aviso(msg, erro) {
 
 function msgErro(e) {
   const m = (e && e.message) || String(e || '');
-  if (/Invalid login credentials/i.test(m)) return 'E-mail ou senha incorretos.';
+  if (/Invalid login credentials/i.test(m)) return 'Usuário ou senha incorretos.';
   if (/Email not confirmed/i.test(m)) return 'Confirme seu e-mail antes de entrar (veja a caixa de entrada e o spam).';
   if (/already registered/i.test(m)) return 'Este e-mail já tem cadastro. Use "Entrar".';
   if (/Password should be at least/i.test(m)) return 'A senha precisa ter pelo menos 6 caracteres.';
@@ -440,6 +441,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
+  if (/admin_criar_acesso|admin_redefinir_senha|admin_logins/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_acesso.sql no Supabase.';
   if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql, terreiro_coroa.sql e terreiro_questionarios.sql).';
   return m;
 }
@@ -667,7 +669,7 @@ function viewEntrar() {
   app.innerHTML = `<div class="cartao estreito"><h1 id="tit">Entrar</h1>
     <form id="frmL" novalidate>
       <div id="campoNome" hidden><label for="nome">Seu nome</label><input id="nome" autocomplete="name"></div>
-      <label for="email">E-mail</label><input id="email" type="email" autocomplete="email" inputmode="email">
+      <label for="email" id="lblEmail">E-mail ou usuário</label><input id="email" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="email">
       <label for="senha">Senha</label><input id="senha" type="password" autocomplete="current-password">
       <p class="erro" id="erroL" role="alert"></p>
       <button class="btn" id="env" style="width:100%;margin-top:.6rem">Entrar</button>
@@ -682,13 +684,16 @@ function viewEntrar() {
     $('#txtAlt').textContent = cadastro ? 'Já tem cadastro?' : 'Ainda não tem cadastro?';
     $('#alt').textContent = cadastro ? 'Entrar' : 'Criar conta';
     $('#campoNome').hidden = !cadastro;
+    $('#lblEmail').textContent = cadastro ? 'E-mail' : 'E-mail ou usuário';
     $('#senha').autocomplete = cadastro ? 'new-password' : 'current-password';
   };
   $('#frmL').onsubmit = async ev => {
     ev.preventDefault();
-    const email = $('#email').value.trim(), senha = $('#senha').value, nome = $('#nome').value.trim();
+    const entrada = $('#email').value.trim(), senha = $('#senha').value, nome = $('#nome').value.trim();
+    const email = (!cadastro && entrada && !entrada.includes('@')) ? loginParaEmail(entrada) : entrada;
     if (cadastro && !nome) { msg('Informe seu nome.'); $('#nome').focus(); return; }
-    if (!email) { msg('Informe seu e-mail.'); $('#email').focus(); return; }
+    if (!entrada || !email) { msg(cadastro ? 'Informe seu e-mail.' : 'Informe seu e-mail ou usuário.'); $('#email').focus(); return; }
+    if (cadastro && !entrada.includes('@')) { msg('Informe um e-mail válido.'); $('#email').focus(); return; }
     if (senha.length < 6) { msg('A senha precisa ter pelo menos 6 caracteres.'); $('#senha').focus(); return; }
     const btn = $('#env'); btn.disabled = true; msg('');
     if (cadastro) {
@@ -991,7 +996,7 @@ async function viewMembros() {
     if (error) { aviso(msgErro(error), true); viradaCoroa().then(v => { $('#cfgVirada').value = v; }); return; }
     aviso('Regra da virada de signo salva.');
   };
-  let linhas = [], contas = [];
+  let linhas = [], contas = [], logins = {};
   const desenhar = () => {
     $('#contas').innerHTML = contas.length
       ? `<div class="aviso-pend"><strong>Contas do site sem cadastro (${contas.length})</strong><ul style="margin:.4rem 0 0;padding-left:1.1rem">${contas.map(c => `<li>${esc(c.nome || '(sem nome)')} <span class="suave">· acesso atual: ${ROTULO_ACESSO[c.papel] || c.papel}</span> <button class="btn peq" data-c="${c.id}">Cadastrar</button></li>`).join('')}</ul></div>` : '';
@@ -1000,13 +1005,14 @@ async function viewMembros() {
     if (!linhas.length) { $('#lista').innerHTML = '<p class="vazio">Nenhum cadastro ainda. Toque em "Novo cadastro" para incluir a primeira pessoa.</p>'; return; }
     if (!rs.length) { $('#lista').innerHTML = '<p class="vazio">Nada encontrado com esse filtro.</p>'; return; }
     $('#lista').innerHTML = `<div class="rolagem"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Função e grau</th><th>Acesso ao site</th><th></th></tr></thead><tbody>`
-      + rs.map(m => `<tr><td>${esc(m.nome)}${m.telefone ? `<br><span class="suave">${esc(m.telefone)}</span>` : ''}</td><td>${esc(T.tipos[m.tipo] ? T.tipos[m.tipo].r : m.tipo)}</td><td>${esc(resumoPessoa(m))}</td><td>${m.usuario_id ? ((m.tipo === 'administrador' || m.acesso_admin) ? 'Com conta (admin)' : 'Com conta') : 'Sem conta'}</td>
-        <td class="acoes"><button class="btn sec peq" data-a="e" data-id="${m.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${m.id}">Excluir</button></td></tr>`).join('')
+      + rs.map(m => `<tr><td>${esc(m.nome)}${m.telefone ? `<br><span class="suave">${esc(m.telefone)}</span>` : ''}</td><td>${esc(T.tipos[m.tipo] ? T.tipos[m.tipo].r : m.tipo)}</td><td>${esc(resumoPessoa(m))}</td><td>${m.usuario_id ? ((m.tipo === 'administrador' || m.acesso_admin) ? 'Com conta (admin)' : 'Com conta') : 'Sem conta'}${m.usuario_id && logins[m.usuario_id] ? `<br><span class="suave">Usuário: ${esc(loginExibicao(logins[m.usuario_id]))}</span>` : ''}</td>
+        <td class="acoes">${m.usuario_id ? `<button class="btn sec peq" data-a="s" data-id="${m.id}">Nova senha</button> ` : `<button class="btn peq" data-a="c" data-id="${m.id}">Criar acesso</button> `}<button class="btn sec peq" data-a="e" data-id="${m.id}">Editar</button> <button class="btn perigo peq" data-a="x" data-id="${m.id}">Excluir</button></td></tr>`).join('')
       + '</tbody></table></div>';
   };
   const carregar = async () => {
-    const [m, p] = await Promise.all([sb.from('membros').select('*').order('nome'), sb.from('profiles').select('id,nome,papel').order('criado_em', {ascending:false})]);
+    const [m, p, lg] = await Promise.all([sb.from('membros').select('*').order('nome'), sb.from('profiles').select('id,nome,papel').order('criado_em', {ascending:false}), sb.rpc('admin_logins')]);
     if (m.error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(m.error))}</p>`; return; }
+    logins = lg && !lg.error ? Object.fromEntries((lg.data || []).map(x => [x.id, x.email])) : {};
     linhas = m.data;
     const usados = new Set(linhas.map(x => x.usuario_id).filter(Boolean));
     contas = (p.data || []).filter(x => !usados.has(x.id));
@@ -1024,6 +1030,8 @@ async function viewMembros() {
     const b = ev.target.closest('button[data-a]'); if (!b) return;
     const row = linhas.find(x => String(x.id) === b.dataset.id); if (!row) return;
     if (b.dataset.a === 'e') { abrirFormMembro(row, null, carregar); return; }
+    if (b.dataset.a === 'c') { abrirCriarAcesso(row, carregar); return; }
+    if (b.dataset.a === 's') { abrirNovaSenha(row, logins[row.usuario_id], carregar); return; }
     if (!(await confirmar(`Excluir o cadastro de "${row.nome}"? Esta ação não pode ser desfeita. Se houver conta do site vinculada, ela volta a ficar "aguardando".`, 'Excluir cadastro'))) return;
     const {data, error} = await sb.from('membros').delete().eq('id', row.id).select();
     if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
@@ -1128,6 +1136,100 @@ async function abrirFormMembro(row, pre, aoSalvar) {
     const res = novo ? await sb.from('membros').insert(obj).select() : await sb.from('membros').update(obj).eq('id', row.id).select();
     if (res.error || !res.data || !res.data.length) { erro(res.error ? msgErro(res.error) : 'Não foi possível salvar.'); btn.disabled = false; return; }
     d.close(); aviso('Salvo.'); aoSalvar();
+  };
+}
+
+function limparLogin(s) {
+  const t = norm(s).trim().replace(/\s+/g, '');
+  return t.includes('@') ? t : t.replace(/[^a-z0-9._-]/g, '');
+}
+function loginParaEmail(s) {
+  const t = limparLogin(s);
+  return !t ? '' : t.includes('@') ? t : t + '@' + CONFIG.dominioUsuario;
+}
+function loginExibicao(email) {
+  const suf = '@' + CONFIG.dominioUsuario;
+  return String(email || '').endsWith(suf) ? email.slice(0, -suf.length) : email;
+}
+function gerarSenha() {
+  const alfa = 'abcdefghjkmnpqrstuvwxyz23456789', b = new Uint32Array(8);
+  crypto.getRandomValues(b);
+  return [...b].map(n => alfa[n % alfa.length]).join('');
+}
+
+function mostrarAcesso(d, titulo, nome, telefone, login, senha) {
+  const url = location.href.split('#')[0];
+  const texto = `${CONFIG.nome}\nAcesso ao site: ${url}\nUsuário: ${login}\nSenha: ${senha}`;
+  let tel = String(telefone || '').replace(/\D/g, '');
+  if (tel.length === 10 || tel.length === 11) tel = '55' + tel;
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${esc(titulo)}</h2>
+    <p class="suave">${esc(nome)}</p>
+    <div class="ajuda"><strong>Usuário:</strong> ${esc(login)}<br><strong>Senha:</strong> ${esc(senha)}</div>
+    <p class="suave">Anote ou envie agora: por segurança, a senha não fica visível depois. Se ela for esquecida, use "Nova senha" na lista.</p>
+    <div class="rodape"><button type="button" class="btn sec" id="copiar">Copiar dados</button>${tel.length >= 12 ? `<a class="btn sec" target="_blank" rel="noopener" href="https://wa.me/${tel}?text=${encodeURIComponent(texto)}">Enviar pelo WhatsApp</a>` : ''}<button type="button" class="btn" id="fechar">Concluir</button></div></form>`;
+  $('#copiar').onclick = async () => {
+    try { await navigator.clipboard.writeText(texto); aviso('Dados copiados.'); } catch (e) { aviso('Não foi possível copiar. Anote os dados na tela.', true); }
+  };
+  $('#fechar').onclick = () => d.close();
+}
+
+function abrirCriarAcesso(row, aoSalvar) {
+  const d = $('#dlg');
+  d.onclick = null; d.onclose = null;
+  const dig = String(row.telefone || '').replace(/\D/g, '');
+  const sugestao = dig.length >= 8 ? dig : limparLogin(String(row.nome || '').split(' ')[0]);
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">Criar acesso</h2>
+    <p class="suave">${esc(row.nome)}</p>
+    <label for="a_login">Usuário *</label><input id="a_login" value="${esc(sugestao)}" autocomplete="off" autocapitalize="none" spellcheck="false">
+    <p class="ajuda">Use letras sem acento, números, ponto, hífen ou sublinhado. Pode ser o telefone ou o primeiro nome. Se preferir, digite um e-mail.</p>
+    <label for="a_senha">Senha * (mínimo 6 caracteres)</label>
+    <div style="display:flex;gap:.5rem"><input id="a_senha" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1"><button type="button" class="btn sec" id="a_gerar">Gerar senha</button></div>
+    <p class="erro" id="erroF" role="alert"></p>
+    <div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Criar acesso</button></div></form>`;
+  d.showModal(); $('#a_login').focus();
+  $('#cancelar').onclick = () => d.close();
+  $('#a_gerar').onclick = () => { $('#a_senha').value = gerarSenha(); };
+  const erro = t => { $('#erroF').textContent = t; };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const login = limparLogin($('#a_login').value), senha = $('#a_senha').value;
+    if (login.length < 3) { erro('Informe o usuário (mínimo 3 caracteres).'); $('#a_login').focus(); return; }
+    if (login.includes('@') && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(login)) { erro('E-mail inválido.'); $('#a_login').focus(); return; }
+    if (senha.length < 6) { erro('A senha precisa ter pelo menos 6 caracteres.'); $('#a_senha').focus(); return; }
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const {data: novoId, error} = await sb.rpc('admin_criar_acesso', {p_login: loginParaEmail(login), p_senha: senha, p_nome: row.nome});
+    if (error || !novoId) { erro(msgErro(error || 'Não foi possível criar o acesso.')); btn.disabled = false; return; }
+    const v = await sb.from('membros').update({usuario_id: novoId}).eq('id', row.id).select();
+    if (v.error || !v.data || !v.data.length) {
+      erro('O acesso foi criado, mas não foi possível ligá-lo ao cadastro. Feche e use "Cadastrar" na lista de contas sem cadastro.');
+      aoSalvar(); return;
+    }
+    aoSalvar();
+    mostrarAcesso(d, 'Acesso criado', row.nome, row.telefone, loginExibicao(loginParaEmail(login)), senha);
+  };
+}
+
+function abrirNovaSenha(row, email, aoSalvar) {
+  const d = $('#dlg');
+  d.onclick = null; d.onclose = null;
+  d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">Nova senha</h2>
+    <p class="suave">${esc(row.nome)}${email ? ` · usuário: ${esc(loginExibicao(email))}` : ''}</p>
+    <label for="a_senha">Nova senha * (mínimo 6 caracteres)</label>
+    <div style="display:flex;gap:.5rem"><input id="a_senha" autocomplete="off" autocapitalize="none" spellcheck="false" style="flex:1"><button type="button" class="btn sec" id="a_gerar">Gerar senha</button></div>
+    <p class="erro" id="erroF" role="alert"></p>
+    <div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar nova senha</button></div></form>`;
+  d.showModal(); $('#a_senha').focus();
+  $('#cancelar').onclick = () => d.close();
+  $('#a_gerar').onclick = () => { $('#a_senha').value = gerarSenha(); };
+  const erro = t => { $('#erroF').textContent = t; };
+  $('#frm').onsubmit = async ev => {
+    ev.preventDefault();
+    const senha = $('#a_senha').value;
+    if (senha.length < 6) { erro('A senha precisa ter pelo menos 6 caracteres.'); $('#a_senha').focus(); return; }
+    const btn = $('#salvar'); btn.disabled = true; erro('');
+    const {error} = await sb.rpc('admin_redefinir_senha', {p_usuario: row.usuario_id, p_senha: senha});
+    if (error) { erro(msgErro(error)); btn.disabled = false; return; }
+    mostrarAcesso(d, 'Senha alterada', row.nome, row.telefone, email ? loginExibicao(email) : '(o mesmo de antes)', senha);
   };
 }
 
