@@ -470,14 +470,21 @@ async function carregarPerfil() {
   if (!sessao) return;
   const {data} = await sb.from('profiles').select('*').eq('id', sessao.user.id).maybeSingle();
   perfil = data;
-  if (perfil) { const m = await sb.rpc('meu_medium_id'); perfil.membro_id = m.error ? null : m.data; }
+  if (perfil) {
+    const m = await sb.rpc('meu_medium_id'); perfil.membro_id = m.error ? null : m.data;
+    const pm = await sb.rpc('minhas_permissoes'); perfil.perm = pm.error || !Array.isArray(pm.data) ? [] : pm.data;
+  }
 }
 
+const ROTA_PERM = {noticias:'#/admin/noticias', eventos:'#/admin/eventos', estoque:'#/admin/estoque'};
+const MOD_ROTA = {'admin/noticias':'noticias', 'admin/eventos':'eventos', 'admin/estoque':'estoque', 'admin/estoque/historico':'estoque', 'admin/estoque/inventario':'estoque'};
+const pode = m => !!perfil && (perfil.papel === 'admin' || (perfil.perm || []).includes(m));
 function desenharNav() {
   const adm = perfil && perfil.papel === 'admin';
+  const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).find(Boolean) : null;
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
     + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
-    + (adm ? '<a href="#/admin/noticias">Painel</a>' : '')
+    + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">Painel</a>` : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
   if (s) s.onclick = async () => { await sb.auth.signOut(); location.hash = '#/'; };
@@ -734,11 +741,11 @@ function viewEntrar() {
 /* ---------- Painel administrativo ---------- */
 
 const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação']];
-const abas = atual => '<div class="abas">' + ABAS.map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
+const abas = atual => '<div class="abas">' + ABAS.filter(([h]) => pode(MOD_ROTA[h.replace(/^#\//, '')])).map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
-function exigirAdmin() {
+function exigirAdmin(h) {
   if (!sessao) { app.innerHTML = '<div class="cartao estreito"><h1>Painel</h1><p>Entre com a conta de administrador para acessar.</p><a class="btn" href="#/entrar">Entrar</a></div>'; return false; }
-  if (!perfil || perfil.papel !== 'admin') { app.innerHTML = '<div class="cartao estreito"><h1>Acesso restrito</h1><p>O painel é exclusivo do administrador.</p></div>'; return false; }
+  if (!perfil || !(perfil.papel === 'admin' || pode(MOD_ROTA[h]))) { app.innerHTML = '<div class="cartao estreito"><h1>Acesso restrito</h1><p>Você não tem permissão para este módulo. Peça ao administrador.</p></div>'; return false; }
   return true;
 }
 
@@ -1086,6 +1093,7 @@ async function abrirFormMembro(row, pre, aoSalvar) {
       <select id="m_grau" aria-label="Grau mediúnico"><option value="">Não informado</option>${Object.entries(T.graus).map(([k, v]) => `<option value="${k}"${String(r.grau) === k ? ' selected' : ''}>${esc(v.r)}</option>`).join('')}</select>
       <p class="ajuda" id="exGrau"></p>
       <label class="chk op"><input type="checkbox" id="m_acesso"${r.acesso_admin ? ' checked' : ''}><span><strong>Acesso de administrador no site</strong><small>Libera o painel completo (cadastros, financeiro, estoque). Marque apenas para quem administra a casa, como o dirigente.</small></span></label>
+      <fieldset class="perm"><legend><strong>Colaborador: o que este médium pode gerenciar</strong></legend><p class="ajuda">Sem marcar nada, é um médium comum. Não precisa marcar se for administrador.</p>${[['noticias','Notícias'],['eventos','Eventos'],['estoque','Estoque'],['material','Material de estudo (publicar)'],['oracoes','Orações (publicar)']].map(([k, t]) => `<label class="chk"><input type="checkbox" class="m_perm" value="${k}"${(r.permissoes || []).includes(k) ? ' checked' : ''}>${t}</label>`).join('')}</fieldset>
     </div>
     <div class="sec-m" id="sec_consulente" hidden><h3>Função</h3>${grupo('f_con', pick(T.funcoes, ['contribuinte', 'nao_contribuinte']), f, 'radio')}</div>
     <label for="m_tel">Telefone</label><input id="m_tel" type="tel" value="${esc(r.telefone || '')}" inputmode="tel">
@@ -1143,14 +1151,14 @@ async function abrirFormMembro(row, pre, aoSalvar) {
     if (!nome) { erro('Preencha o nome.'); $('#m_nome').focus(); return; }
     if (!tipo) { erro('Escolha o tipo de cadastro.'); $('#m_tipo').focus(); return; }
     const marc = n => [...d.querySelectorAll(`input[name="${n}"]:checked`)].map(i => i.value);
-    let funcoes = [], grau = null, acesso = false;
+    let funcoes = [], grau = null, acesso = false, perms = [];
     if (tipo === 'administrador') funcoes = marc('f_adm');
-    if (tipo === 'medium') { funcoes = [...marc('f_med'), ...marc('f_cargo')]; grau = $('#m_grau').value ? Number($('#m_grau').value) : null; acesso = $('#m_acesso').checked; }
+    if (tipo === 'medium') { funcoes = [...marc('f_med'), ...marc('f_cargo')]; grau = $('#m_grau').value ? Number($('#m_grau').value) : null; acesso = $('#m_acesso').checked; perms = [...document.querySelectorAll('.m_perm:checked')].map(x => x.value); }
     if (tipo === 'consulente') { funcoes = marc('f_con'); if (!funcoes.length) { erro('Escolha a função: contribuinte ou não contribuinte.'); return; } }
     const v = id => $(id).value.trim() || null;
     let coroa = null;
     if (tipo === 'medium') { const e = coroaEstado(); coroa = e.usar ? (e.usar === e.gravada ? e.gravada : {...e.usar, calculadoEm: new Date().toISOString()}) : null; }
-    const obj = {nome, tipo, funcoes, grau, acesso_admin: acesso, telefone: v('#m_tel'), nascimento: v('#m_nasc'), hora_nascimento: tipo === 'medium' ? v('#m_hora') : null, coroa_calculo: coroa, data_entrada: v('#m_entr'), observacoes: v('#m_obs'), usuario_id: $('#m_conta').value || null};
+    const obj = {nome, tipo, funcoes, grau, acesso_admin: acesso, permissoes: perms, telefone: v('#m_tel'), nascimento: v('#m_nasc'), hora_nascimento: tipo === 'medium' ? v('#m_hora') : null, coroa_calculo: coroa, data_entrada: v('#m_entr'), observacoes: v('#m_obs'), usuario_id: $('#m_conta').value || null};
     const btn = $('#salvar'); btn.disabled = true; erro('');
     const res = novo ? await sb.from('membros').insert(obj).select() : await sb.from('membros').update(obj).eq('id', row.id).select();
     if (res.error || !res.data || !res.data.length) { erro(res.error ? msgErro(res.error) : 'Não foi possível salvar.'); btn.disabled = false; return; }
@@ -1854,7 +1862,7 @@ async function rotear() {
   document.title = CONFIG.nome;
   if (!f) { location.hash = '#/'; return; }
   if (h === 'entrar' && sessao) { location.hash = '#/'; return; }
-  if (adm && !exigirAdmin()) return;
+  if (adm && !exigirAdmin(h)) return;
   if (perfil && perfil.papel === 'admin') limparEventosEncerrados();
   await f();
   window.scrollTo(0, 0);
