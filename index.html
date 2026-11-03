@@ -484,6 +484,7 @@ function desenharNav() {
   const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).find(Boolean) : null;
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
     + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
+    + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/material">Material</a><a href="#/oracoes">Orações</a><a href="#/diario">Diário</a>' : '')
     + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">Painel</a>` : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
@@ -1832,6 +1833,61 @@ async function viewAtividades() {
 
 /* ---------- Rotas e início ---------- */
 
+const CATS_MAT = {iniciacao:'Iniciação', complementar:'Complementar', gira_desenvolvimento:'Gira de desenvolvimento', biblioteca:'Biblioteca mediúnica'};
+const TEXTOS = {
+  diario: {tabela:'diario', titulo:'Diário do médium', singular:'anotação', botao:'Nova anotação', ajuda:'Seus lembretes e anotações importantes. Só você consegue ler o que escreve aqui.', vazio:'Nenhuma anotação ainda.', perm:null, ord:['criado_em', false]},
+  material: {tabela:'material_estudo', titulo:'Material de estudo', singular:'material', botao:'Novo material', ajuda:'', vazio:'Nenhum material publicado ainda.', perm:'material', cats:CATS_MAT, ord:['criado_em', false]},
+  oracoes: {tabela:'oracoes', titulo:'Orações do médium', singular:'oração', botao:'Nova oração', ajuda:'', vazio:'Nenhuma oração cadastrada ainda.', perm:'oracoes', ord:['titulo', true]}
+};
+
+async function viewTextos(chave) {
+  const c = TEXTOS[chave];
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) {
+    app.innerHTML = `<div class="cartao estreito"><h1>${esc(c.titulo)}</h1><p>Esta área é para médiuns. Entre com a sua conta ou peça ao administrador para liberar o acesso.</p></div>`; return;
+  }
+  const gerencia = !c.perm || pode(c.perm);
+  let cat = '', linhas = [];
+  app.innerHTML = `<div class="cab"><h1>${esc(c.titulo)}</h1>${gerencia ? `<button class="btn" id="novo">${esc(c.botao)}</button>` : ''}</div>${c.ajuda ? `<p class="suave">${esc(c.ajuda)}</p>` : ''}${c.cats ? `<div class="filtros"><select id="fcat" aria-label="Categoria"><option value="">Todas as categorias</option>${Object.entries(c.cats).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></div>` : ''}<div id="lista"><p class="vazio">Carregando…</p></div>`;
+  const desenhar = () => {
+    const rs = linhas.filter(r => !cat || r.categoria === cat);
+    $('#lista').innerHTML = rs.length ? rs.map(r => `<article class="cartao" style="margin-bottom:1rem"><div class="cab"><div><h2>${esc(r.titulo)}</h2><span class="suave">${c.cats ? esc(c.cats[r.categoria] || '') + ' · ' : ''}${dataHoraBR(r.criado_em)}</span></div>${gerencia ? `<div><button class="btn sec" data-a="e" data-id="${r.id}">Editar</button> <button class="btn sec" data-a="x" data-id="${r.id}">Excluir</button></div>` : ''}</div><p>${texto(r.texto)}</p></article>`).join('') : `<p class="vazio">${esc(c.vazio)}</p>`;
+  };
+  const carregar = async () => {
+    const {data, error} = await sb.from(c.tabela).select('*').order(c.ord[0], {ascending: c.ord[1]});
+    if (error) { $('#lista').innerHTML = `<p class="erro" role="alert">${esc(msgErro(error))}</p>`; return; }
+    linhas = data || []; desenhar();
+  };
+  const abrir = r => {
+    const d = $('#dlg'); d.onclick = null; d.onclose = null;
+    d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${r ? 'Editar' : 'Nova'} ${esc(c.singular)}</h2>${c.cats ? `<label for="t_cat">Categoria *</label><select id="t_cat">${Object.entries(c.cats).map(([k, v]) => `<option value="${k}"${r && r.categoria === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>` : ''}<label for="t_tit">Título *</label><input id="t_tit" maxlength="150" value="${esc(r ? r.titulo : '')}"><label for="t_txt">Texto *</label><textarea id="t_txt" rows="10">${esc(r ? r.texto : '')}</textarea><p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar</button></div></form>`;
+    d.showModal(); $('#t_tit').focus();
+    $('#cancelar').onclick = () => d.close();
+    $('#frm').onsubmit = async ev => {
+      ev.preventDefault();
+      const obj = {titulo: $('#t_tit').value.trim(), texto: $('#t_txt').value.trim()};
+      if (c.cats) obj.categoria = $('#t_cat').value;
+      if (!obj.titulo || !obj.texto) { $('#erroF').textContent = 'Preencha o título e o texto.'; return; }
+      if (chave === 'diario') obj.atualizado_em = new Date().toISOString();
+      const btn = $('#salvar'); btn.disabled = true;
+      const res = r ? await sb.from(c.tabela).update(obj).eq('id', r.id).select() : await sb.from(c.tabela).insert(obj).select();
+      if (res.error || !res.data || !res.data.length) { $('#erroF').textContent = res.error ? msgErro(res.error) : 'Não foi possível salvar.'; btn.disabled = false; return; }
+      d.close(); aviso('Salvo.'); carregar();
+    };
+  };
+  const nv = $('#novo'); if (nv) nv.onclick = () => abrir(null);
+  const fc = $('#fcat'); if (fc) fc.onchange = () => { cat = fc.value; desenhar(); };
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const r = linhas.find(x => String(x.id) === b.dataset.id); if (!r) return;
+    if (b.dataset.a === 'e') { abrir(r); return; }
+    if (!(await confirmar(`Excluir "${r.titulo}"? Esta ação não pode ser desfeita.`, 'Excluir'))) return;
+    const {data, error} = await sb.from(c.tabela).delete().eq('id', r.id).select();
+    if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
+    aviso('Excluído.'); carregar();
+  };
+  carregar();
+}
+
 const ROTAS = {
   '': viewInicio, 'agenda': viewAgenda, 'entrar': viewEntrar,
   'admin/noticias': () => viewCrud(CFG.noticias),
@@ -1846,7 +1902,10 @@ const ROTAS = {
   'admin/questionarios': viewQuestionarios,
   'admin/questionarios/entregas': viewEntregas,
   'admin/situacao': viewSituacao,
-  'atividades': viewAtividades
+  'atividades': viewAtividades,
+  'diario': () => viewTextos('diario'),
+  'material': () => viewTextos('material'),
+  'oracoes': () => viewTextos('oracoes')
 };
 
 async function rotear() {
