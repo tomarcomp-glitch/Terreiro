@@ -469,6 +469,7 @@ function msgErro(e) {
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
   if (/admin_negar_cadastro|meu_cadastro_id|mensagens/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
+  if (/lista_incorporantes|medium_id/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes2.sql no Supabase.';
   if (/admin_criar_acesso|admin_redefinir_senha|admin_logins/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_acesso.sql no Supabase.';
   if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql, terreiro_coroa.sql e terreiro_questionarios.sql).';
   return m;
@@ -593,7 +594,8 @@ async function viewInicio() {
 
 async function minhasPresencas() {
   if (!sessao || !perfil || !meuCad()) return new Map();
-  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('membro_id', meuCad());
+  if (perfil.papel === 'consulente') { const r = await sb.rpc('lista_incorporantes'); INCORP = r.error ? [] : (r.data || []); }
+  const {data} = await sb.from('presencas').select('evento_id,vai,motivo,medium_id').eq('membro_id', meuCad());
   return new Map((data || []).map(x => [x.evento_id, x]));
 }
 
@@ -602,7 +604,7 @@ const msgPresenca = r => !r ? 'Você ainda não respondeu.' : r.vai ? 'Presença
 function widgetPresenca(x, resp) {
   if (!x.pede_presenca || !sessao || !perfil || !meuCad() || !resp) return '';
   const r = resp.get(x.id);
-  return `<div class="presenca"><div class="pr-linha"><strong>Sua presença:</strong>
+  return `<div class="presenca">${perfil.papel === 'consulente' ? `<label for="med_${x.id}">Médium que vai atender você *</label><select id="med_${x.id}" data-acao="medium"><option value="">Escolha o médium…</option>${INCORP.map(i => `<option value="${i.id}"${r && r.medium_id === i.id ? ' selected' : ''}>${esc(i.nome)}</option>`).join('')}</select>` : ''}<div class="pr-linha"><strong>Sua presença:</strong>
     <button class="btn sec peq" data-acao="irei" data-id="${x.id}" aria-pressed="${!!(r && r.vai)}">Irei</button>
     <button class="btn sec peq" data-acao="naoirei" data-id="${x.id}" aria-pressed="${!!(r && !r.vai)}">Não irei</button></div>
     <div class="pr-motivo"${r && !r.vai ? '' : ' hidden'}><label for="mot_${x.id}">Motivo (obrigatório)</label><input id="mot_${x.id}" maxlength="200" value="${esc(r && !r.vai ? r.motivo : '')}"><button class="btn peq" data-acao="salvar-motivo" data-id="${x.id}">Salvar motivo</button></div>
@@ -611,10 +613,12 @@ function widgetPresenca(x, resp) {
 
 async function salvarPresenca(id, vai, motivo, wrap) {
   if (!sessao || !perfil || !meuCad()) return;
+  const sm = wrap.querySelector('select[data-acao=medium]');
+  if (vai && sm && !sm.value) { aviso('Escolha o médium que vai atender você.', true); return; }
   const botoes = wrap.querySelectorAll('button');
   botoes.forEach(b => { b.disabled = true; });
   const {error} = await sb.from('presencas').upsert(
-    {evento_id: id, membro_id: meuCad(), vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
+    {evento_id: id, membro_id: meuCad(), vai, motivo: vai ? null : motivo, ...(sm ? {medium_id: vai && sm.value ? Number(sm.value) : null} : {}), atualizado_em: new Date().toISOString()},
     {onConflict: 'evento_id,membro_id'});
   botoes.forEach(b => { b.disabled = false; });
   if (error) { aviso(msgErro(error), true); return; }
@@ -1379,29 +1383,22 @@ async function viewInventario() {
 const GRUPOS = [['curimba', 'Médiuns curimbeiros'], ['cambone', 'Médiuns cambones'], ['incorporante', 'Médiuns incorporantes']];
 const segunda = ref => { const d = new Date(ref + 'T00:00:00'); d.setDate(d.getDate() - (d.getDay() + 6) % 7); return d; };
 
-function relGira(ev, todos, fq, cs) {
-  const med = todos.filter(m => m.tipo === 'medium'), st = {};
-  const meus = fq.filter(x => x.evento_id === ev.id);
-  meus.forEach(x => { st[x.membro_id] = x; });
-  const por = s => med.filter(m => st[m.id] && st[m.id].status === s);
-  const pres = por('presente'), aus = por('ausente'), jus = por('justificada');
-  const dele = cs.filter(c => c.evento_id === ev.id);
-  const nomeM = id => (todos.find(x => x.id === id) || {}).nome;
+function relGira(ev, todos, fq, cs, pr) {
+  const med = todos.filter(m => m.tipo === 'medium'), st = {}, pv = {};
+  const meus = fq.filter(x => x.evento_id === ev.id), prs = pr.filter(x => x.evento_id === ev.id);
+  meus.forEach(x => { st[x.membro_id] = x; }); prs.forEach(x => { pv[x.membro_id] = x; });
+  const por = id => todos.find(x => x.id === id) || {};
+  const presente = m => st[m.id] ? st[m.id].status === 'presente' : !!(pv[m.id] && pv[m.id].vai === true);
   const lista = (l, f) => l.length ? `<ul>${l.map(f).join('')}</ul>` : '<p class="suave">Nenhum.</p>';
-  const grupo = ([k, t]) => {
-    const l = pres.filter(m => (m.funcoes || []).includes(k));
-    return `<h3>${t} (${l.length})</h3>` + lista(l, m => {
-      const c = k === 'incorporante' ? dele.filter(x => x.medium_id === m.id).map(x => x.nome).join(', ') : '';
-      return `<li>${esc(m.nome)}${c ? ' — consulente confirmado: ' + esc(c) : ''}</li>`;
-    });
-  };
-  const outros = pres.filter(m => !GRUPOS.some(([k]) => (m.funcoes || []).includes(k)));
-  return `<div class="lista-pres">${meus.length
-    ? `<p class="suave">Presentes: ${pres.length} · Ausentes sem justificativa: ${aus.length} · Ausentes justificados: ${jus.length}</p>${GRUPOS.map(grupo).join('')}${outros.length ? `<h3>Outros médiuns presentes (${outros.length})</h3>${lista(outros, m => `<li>${esc(m.nome)}</li>`)}` : ''}
-      <h3>Médiuns ausentes sem justificativa (${aus.length})</h3>${lista(aus, m => `<li>${esc(m.nome)}</li>`)}
-      ${jus.length ? `<h3>Ausentes com justificativa (${jus.length})</h3>${lista(jus, m => `<li>${esc(m.nome)}${st[m.id].motivo ? ' — ' + esc(st[m.id].motivo) : ''}</li>`)}` : ''}`
-    : '<p class="pr-pend">Chamada ainda não registrada. Toque em "Chamada".</p>'}
-    <h3>Consulentes confirmados (${dele.length})</h3>${lista(dele, c => `<li>${esc(c.nome)}${c.medium_id ? ' — com ' + esc(nomeM(c.medium_id) || '') : ''}</li>`)}</div>`;
+  const grupo = (n, k, t) => { const l = med.filter(m => presente(m) && (m.funcoes || []).includes(k)); return `<h3>${n}) ${t} presentes (${l.length})</h3>${lista(l, m => `<li>${esc(m.nome)}</li>`)}`; };
+  const site = prs.filter(x => x.vai === true && por(x.membro_id).tipo === 'consulente').sort((a, b) => String(a.atualizado_em).localeCompare(String(b.atualizado_em)))
+    .map(x => ({nome: por(x.membro_id).nome, medium_id: x.medium_id, cid: x.membro_id}));
+  const manual = cs.filter(c => c.evento_id === ev.id && !site.some(d => d.cid === c.consulente_id)).map(c => ({nome: c.nome, medium_id: c.medium_id}));
+  const cons = [...site, ...manual], aus = med.filter(m => st[m.id] && st[m.id].status === 'ausente');
+  return `<div class="lista-pres"><h3>1) Consulentes por ordem de confirmação (${cons.length})</h3>${cons.length ? `<ol>${cons.map(c => `<li>${esc(c.nome)} — ${c.medium_id ? esc(por(c.medium_id).nome || '') : '<span class="pr-pend">sem médium incorporante definido</span>'}</li>`).join('')}</ol>` : '<p class="suave">Nenhum.</p>'}
+    ${meus.length ? '' : '<p class="suave">Chamada ainda não registrada: os médiuns abaixo são os que confirmaram presença.</p>'}
+    ${grupo(2, 'curimba', 'Curimbeiros')}${grupo(3, 'cambone', 'Cambones')}
+    <h3>Faltas não justificadas (${aus.length})</h3>${meus.length ? lista(aus, m => `<li>${esc(m.nome)}</li>`) : '<p class="pr-pend">Aparecem depois de registrar a chamada.</p>'}</div>`;
 }
 
 async function viewRelSemanal(refPar) {
@@ -1416,11 +1413,11 @@ async function viewRelSemanal(refPar) {
       sb.from('eventos').select('id,titulo,data_hora').eq('tipo', 'gira').gte('data_hora', seg.toISOString()).lt('data_hora', prox.toISOString()).order('data_hora'),
       sb.from('membros').select('id,nome,tipo,funcoes,grau').order('nome')]);
     const ids = (e.data || []).map(x => x.id);
-    const [f, c] = (e.error || m.error || !ids.length) ? [{data: []}, {data: []}] : await Promise.all([sb.from('frequencia').select('*').in('evento_id', ids), sb.from('consulentes_gira').select('*').in('evento_id', ids)]);
-    const er = e.error || m.error || f.error || c.error;
+    const [f, c, p] = (e.error || m.error || !ids.length) ? [{data: []}, {data: []}, {data: []}] : await Promise.all([sb.from('frequencia').select('*').in('evento_id', ids), sb.from('consulentes_gira').select('*').in('evento_id', ids), sb.from('presencas').select('*').in('evento_id', ids)]);
+    const er = e.error || m.error || f.error || c.error || p.error;
     if (er) { $('#corpo').innerHTML = `<p class="erro">${esc(msgErro(er))}</p>`; return; }
     evs = e.data; todos = m.data;
-    $('#corpo').innerHTML = evs.length ? evs.map(ev => `<section class="cartao" style="margin-bottom:1rem"><div class="cab"><div><h2>${esc(ev.titulo)}</h2><span class="suave">${dataHoraBR(ev.data_hora)}</span></div><div><button class="btn peq" data-a="ch" data-id="${ev.id}">Chamada</button> <button class="btn sec peq" data-a="co" data-id="${ev.id}">Consulentes</button></div></div>${relGira(ev, todos, f.data, c.data)}</section>`).join('')
+    $('#corpo').innerHTML = evs.length ? evs.map(ev => `<section class="cartao" style="margin-bottom:1rem"><div class="cab"><div><h2>${esc(ev.titulo)}</h2><span class="suave">${dataHoraBR(ev.data_hora)}</span></div><div><button class="btn peq" data-a="ch" data-id="${ev.id}">Chamada</button> <button class="btn sec peq" data-a="co" data-id="${ev.id}">Consulentes</button></div></div>${relGira(ev, todos, f.data, c.data, p.data)}</section>`).join('')
       : '<p class="vazio">Nenhuma gira nesta semana. Cadastre em Eventos usando o tipo "Gira".</p>';
   };
   $('#corpo').onclick = ev => {
@@ -1468,13 +1465,21 @@ async function abrirConsulentes(ev, todos, aoMudar) {
     <label for="c_med">Médium incorporante</label><select id="c_med"><option value="">Ainda não definido</option>${inc.map(m => `<option value="${m.id}">${esc(m.nome)}</option>`).join('')}</select>
     <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="fechar">Fechar</button><button class="btn">Adicionar consulente</button></div></form>`;
   d.showModal();
-  d.onclose = () => { d.onclick = null; d.onclose = null; if (mudou) aoMudar(); };
+  d.onchange = async e => {
+    const sl = e.target.closest('select[data-pm]'); if (!sl) return;
+    const {error} = await sb.from('presencas').update({medium_id: sl.value ? Number(sl.value) : null}).eq('evento_id', ev.id).eq('membro_id', Number(sl.dataset.pm));
+    if (error) { aviso(msgErro(error), true); return; }
+    mudou = true; aviso('Médium definido.');
+  };
+  d.onclose = () => { d.onclick = null; d.onchange = null; d.onclose = null; if (mudou) aoMudar(); };
   $('#fechar').onclick = () => d.close();
   const desenhar = async () => {
-    const {data, error} = await sb.from('consulentes_gira').select('*').eq('evento_id', ev.id).order('id');
+    const [{data, error}, pc] = await Promise.all([sb.from('consulentes_gira').select('*').eq('evento_id', ev.id).order('id'), sb.from('presencas').select('membro_id,medium_id').eq('evento_id', ev.id).eq('vai', true)]);
     const c = $('#corpoC'); if (!c) return;
+    const site = (pc.data || []).filter(x => (todos.find(t => t.id === x.membro_id) || {}).tipo === 'consulente');
+    const blocoSite = site.length ? `<p class="suave">Confirmados pelo site. Indique ou troque o médium incorporante:</p><ul class="lista-m">${site.map(x => `<li><strong>${esc((todos.find(t => t.id === x.membro_id) || {}).nome)}</strong><select data-pm="${x.membro_id}" aria-label="Médium incorporante"><option value="">Ainda não definido</option>${inc.map(m => `<option value="${m.id}"${x.medium_id === m.id ? ' selected' : ''}>${esc(m.nome)}</option>`).join('')}</select></li>`).join('')}</ul>` : '';
     if (error) { c.innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
-    c.innerHTML = data.length ? `<ul class="lista-m">${data.map(x => `<li><strong>${esc(x.nome)}</strong>${x.medium_id ? ' <span class="suave">— com ' + esc((todos.find(m => m.id === x.medium_id) || {}).nome || '') + '</span>' : ''} <button type="button" class="btn perigo peq" data-x="${x.id}">Remover</button></li>`).join('')}</ul>` : '<p class="suave">Nenhum consulente confirmado ainda.</p>';
+    c.innerHTML = blocoSite + (data.length ? `<ul class="lista-m">${data.map(x => `<li><strong>${esc(x.nome)}</strong>${x.medium_id ? ' <span class="suave">— com ' + esc((todos.find(m => m.id === x.medium_id) || {}).nome || '') + '</span>' : ''} <button type="button" class="btn perigo peq" data-x="${x.id}">Remover</button></li>`).join('')}</ul>` : (site.length ? '' : '<p class="suave">Nenhum consulente confirmado ainda.</p>'));
   };
   d.onclick = async e => {
     const b = e.target.closest('button[data-x]'); if (!b) return;
@@ -1859,6 +1864,7 @@ async function viewAtividades() {
 
 /* ---------- Calendário, lua, avisos, contribuição e mensagens ---------- */
 
+let INCORP = [];
 const p2 = n => String(n).padStart(2, '0');
 const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 const FASES = ['Lua nova', 'Quarto crescente', 'Lua cheia', 'Quarto minguante'], ICO = ['🌑', '🌓', '🌕', '🌗'];
@@ -2141,6 +2147,11 @@ async function iniciar() {
   const ic = document.createElement('link'); ic.rel = 'icon'; ic.href = $('#logoTopo').src; document.head.appendChild(ic);
   $('#menuBtn').onclick = () => { const a = nav.classList.toggle('aberto'); $('#menuBtn').setAttribute('aria-expanded', String(a)); };
   window.addEventListener('hashchange', rotear);
+  app.addEventListener('change', e => {
+    const sl = e.target.closest('select[data-acao=medium]'); if (!sl) return;
+    const w = sl.closest('.presenca'), ir = w.querySelector('[data-acao=irei]');
+    if (sl.value && ir.getAttribute('aria-pressed') === 'true') salvarPresenca(Number(ir.dataset.id), true, null, w);
+  });
   app.addEventListener('click', ev => {
     const b = ev.target.closest('button[data-acao]'); if (!b) return;
     if (b.dataset.acao === 'curtir') alternarCurtida(b);
