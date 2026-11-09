@@ -112,7 +112,14 @@ label.op small{font-weight:400;color:var(--suave);line-height:1.35}
 .topo{background:rgba(255,255,255,.94);backdrop-filter:blur(6px);border-bottom:1px solid var(--linha);box-shadow:0 2px 10px rgba(13,59,158,.06)}
 .hero{position:relative;border-bottom:1px solid var(--linha)!important;margin-bottom:2rem}
 h1,h2{color:var(--verde)}
-@media print{</style>
+@media print{.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;max-width:420px}.cal b{text-align:center;font-size:.8rem;color:var(--suave)}
+.cd{position:relative;min-height:44px;border:1px solid var(--linha);background:var(--papel);border-radius:6px;font:inherit;cursor:pointer;color:var(--texto);padding:0}
+.cd.hj{border-color:var(--verde);font-weight:700}.cd.fase{background:#e6efff;border-color:var(--ouro)}.cd.sel{background:var(--verde);color:var(--sobre)}
+.cd .lua{position:absolute;right:2px;top:0;font-size:.8rem}
+.cal-cab{display:flex;align-items:center;justify-content:space-between;max-width:420px;margin:.5rem 0}
+.hora{display:flex;gap:.5rem;align-items:center;margin:.5rem 0}.hora select{width:auto}
+#faixa{max-width:980px;margin:0 auto;padding:0 1rem}.faixa-i{background:#e6efff;border:1px solid var(--ouro);border-radius:6px;padding:.6rem .8rem;margin-top:.6rem;font-weight:600}
+</style>
 </head>
 <body>
 <header class="topo">
@@ -120,6 +127,7 @@ h1,h2{color:var(--verde)}
   <button class="btn sec menu-btn" id="menuBtn" aria-expanded="false" aria-controls="nav">Menu</button>
   <nav id="nav" aria-label="Principal"></nav>
 </header>
+<div id="faixa" aria-live="polite"></div>
 <main id="app" tabindex="-1"><p class="vazio">Carregando…</p></main>
 <dialog id="dlg" aria-labelledby="dlgT"></dialog>
 <dialog id="dlg2" aria-labelledby="dlg2T"></dialog>
@@ -460,6 +468,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
+  if (/admin_negar_cadastro|meu_cadastro_id|mensagens/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
   if (/admin_criar_acesso|admin_redefinir_senha|admin_logins/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_acesso.sql no Supabase.';
   if (/schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL novo no Supabase (arquivos terreiro_novidades.sql, terreiro_coroa.sql e terreiro_questionarios.sql).';
   return m;
@@ -472,6 +481,7 @@ async function carregarPerfil() {
   perfil = data;
   if (perfil) {
     const m = await sb.rpc('meu_medium_id'); perfil.membro_id = m.error ? null : m.data;
+    const cc = await sb.rpc('meu_cadastro_id'); perfil.cad_id = cc.error ? null : cc.data;
     const pm = await sb.rpc('minhas_permissoes'); perfil.perm = pm.error || !Array.isArray(pm.data) ? [] : pm.data;
   }
 }
@@ -484,6 +494,9 @@ function desenharNav() {
   const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).find(Boolean) : null;
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
     + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
+    + (sessao && perfil && meuCad() && ['consulente', 'membro'].includes(perfil.papel) ? '<a href="#/contribuicao">Contribuição</a>' : '')
+    + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/lua">Lua</a>' : '')
+    + (sessao && perfil && perfil.papel === 'membro' ? '<a href="#/mensagens">Mensagens</a>' : '')
     + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/material">Material</a><a href="#/oracoes">Orações</a><a href="#/diario">Diário</a>' : '')
     + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">Painel</a>` : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
@@ -566,7 +579,7 @@ async function viewInicio() {
     minhasPresencas()
   ]);
   const pend = perfil && perfil.papel === 'pendente'
-    ? '<div class="aviso-pend">Seu cadastro foi recebido e aguarda a aprovação do administrador para liberar a área de membros.</div>' : '';
+    ? '<div class="aviso-pend">Seu cadastro foi recebido e aguarda a aprovação do administrador. Não é preciso criar outra conta: basta aguardar.</div>' : '';
   const noticias = n.error ? `<p class="erro">${esc(msgErro(n.error))}</p>`
     : !n.data.length ? '<p class="vazio">Nenhuma notícia publicada ainda.</p>'
     : n.data.map(x => cartaoNoticia(x, curtidas)).join('');
@@ -579,15 +592,15 @@ async function viewInicio() {
 }
 
 async function minhasPresencas() {
-  if (!sessao || !perfil || !perfil.membro_id) return new Map();
-  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('membro_id', perfil.membro_id);
+  if (!sessao || !perfil || !meuCad()) return new Map();
+  const {data} = await sb.from('presencas').select('evento_id,vai,motivo').eq('membro_id', meuCad());
   return new Map((data || []).map(x => [x.evento_id, x]));
 }
 
 const msgPresenca = r => !r ? 'Você ainda não respondeu.' : r.vai ? 'Presença confirmada.' : 'Registrado: você não irá.';
 
 function widgetPresenca(x, resp) {
-  if (!x.pede_presenca || !sessao || !perfil || !perfil.membro_id || !resp) return '';
+  if (!x.pede_presenca || !sessao || !perfil || !meuCad() || !resp) return '';
   const r = resp.get(x.id);
   return `<div class="presenca"><div class="pr-linha"><strong>Sua presença:</strong>
     <button class="btn sec peq" data-acao="irei" data-id="${x.id}" aria-pressed="${!!(r && r.vai)}">Irei</button>
@@ -597,11 +610,11 @@ function widgetPresenca(x, resp) {
 }
 
 async function salvarPresenca(id, vai, motivo, wrap) {
-  if (!sessao || !perfil || !perfil.membro_id) return;
+  if (!sessao || !perfil || !meuCad()) return;
   const botoes = wrap.querySelectorAll('button');
   botoes.forEach(b => { b.disabled = true; });
   const {error} = await sb.from('presencas').upsert(
-    {evento_id: id, membro_id: perfil.membro_id, vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
+    {evento_id: id, membro_id: meuCad(), vai, motivo: vai ? null : motivo, atualizado_em: new Date().toISOString()},
     {onConflict: 'evento_id,membro_id'});
   botoes.forEach(b => { b.disabled = false; });
   if (error) { aviso(msgErro(error), true); return; }
@@ -616,7 +629,7 @@ async function salvarPresenca(id, vai, motivo, wrap) {
 async function resumoPresencas() {
   const [ev, mm, pr] = await Promise.all([
     sb.from('eventos').select('id,titulo,data_hora').eq('pede_presenca', true).gte('data_hora', new Date().toISOString()).order('data_hora'),
-    sb.from('membros').select('id,nome,usuario_id').eq('tipo', 'medium').order('nome'),
+    sb.from('membros').select('id,nome,usuario_id,tipo').in('tipo', ['medium', 'consulente']).order('nome'),
     sb.from('presencas').select('evento_id,membro_id,vai,motivo')
   ]);
   if (ev.error || mm.error || pr.error) return null;
@@ -624,7 +637,7 @@ async function resumoPresencas() {
   ev.data.forEach(e => {
     const resp = {};
     pr.data.filter(x => x.evento_id === e.id).forEach(x => { resp[x.membro_id] = x; });
-    const linhas = mm.data.map(m => ({id: m.id, nome: m.nome, semConta: !m.usuario_id, vai: resp[m.id] ? resp[m.id].vai : null, motivo: resp[m.id] ? resp[m.id].motivo : null}));
+    const linhas = mm.data.filter(m => m.tipo === 'medium' || resp[m.id]).map(m => ({id: m.id, nome: m.nome + (m.tipo === 'consulente' ? ' (consulente)' : ''), semConta: !m.usuario_id, vai: resp[m.id] ? resp[m.id].vai : null, motivo: resp[m.id] ? resp[m.id].motivo : null}));
     const sem = linhas.filter(l => l.vai === null);
     sem.forEach(l => pendentes.add(l.id));
     porEvento[e.id] = {linhas, irao: linhas.filter(l => l.vai === true), nao: linhas.filter(l => l.vai === false), sem};
@@ -636,8 +649,11 @@ async function preencherAlerta() {
   if (!perfil || perfil.papel !== 'admin') return;
   const r = await resumoPresencas();
   const el = $('#alertaPres');
-  if (!el || !r || !r.eventosComPendencia) return;
-  el.innerHTML = `<div class="alerta-pres" role="alert"><strong>Presenças sem resposta:</strong> ${r.membrosPendentes} membro(s) ainda não decidiram em ${r.eventosComPendencia} evento(s). <a href="#/admin/eventos">Ver respostas</a></div>`;
+  if (!el) return;
+  const nm = await sb.from('mensagens').select('id', {count: 'exact', head: true}).eq('lida', false);
+  const msgs = !nm.error && nm.count ? `<div class="alerta-pres" role="alert"><strong>Mensagens novas:</strong> ${nm.count} de médiuns. <a href="#/admin/mensagens">Ler</a></div>` : '';
+  if (!r || !r.eventosComPendencia) { el.innerHTML = msgs; return; }
+  el.innerHTML = msgs + `<div class="alerta-pres" role="alert"><strong>Presenças sem resposta:</strong> ${r.membrosPendentes} membro(s) ainda não decidiram em ${r.eventosComPendencia} evento(s). <a href="#/admin/eventos">Ver respostas</a></div>`;
 }
 
 async function abrirRespostas(ev, aoMudar) {
@@ -728,7 +744,7 @@ function viewEntrar() {
       btn.disabled = false;
       if (error) { msg(msgErro(error)); return; }
       if (data.session) { location.hash = '#/'; return; }
-      msg('Cadastro criado. Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre.', true);
+      msg('Cadastro criado. Enviamos um link de confirmação para o seu e-mail. Confirme e depois entre. O acesso só é liberado após a aprovação do administrador: não crie outra conta.', true);
     } else {
       const {error} = await sb.auth.signInWithPassword({email, password: senha});
       btn.disabled = false;
@@ -741,7 +757,7 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação']];
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação'],['#/admin/mensagens','Mensagens']];
 const abas = atual => '<div class="abas">' + ABAS.filter(([h]) => pode(MOD_ROTA[h.replace(/^#\//, '')])).map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin(h) {
@@ -866,15 +882,17 @@ async function abrirForm(cfg, row, aoSalvar) {
     const rot = `<label for="${id}">${esc(c.r)}${c.req ? ' *' : ''}</label>`;
     if (c.tipo === 'textarea') return `${rot}<textarea id="${id}">${esc(v ?? '')}</textarea>`;
     if (c.tipo === 'select') return `${rot}<select id="${id}">${c.req ? '' : '<option value=""></option>'}${ops[c.k].map(o => `<option value="${esc(o.v)}"${String(o.v) === String(v ?? '') ? ' selected' : ''}>${esc(o.t)}</option>`).join('')}</select>`;
-    const tipo = c.tipo === 'datetime' ? 'datetime-local' : c.tipo;
-    const val = c.tipo === 'datetime' ? paraLocal(v) : (v ?? '');
+    if (c.tipo === 'datetime') return `${rot}<input id="${id}" type="hidden" value="${esc(paraLocal(v))}"><div class="seldata" data-alvo="${id}"></div>`;
+    const tipo = c.tipo;
+    const val = v ?? '';
     const extra = c.tipo === 'number' ? ' step="any" inputmode="decimal"' + (c.min !== undefined ? ` min="${c.min}"` : '') : '';
     return `${rot}<input id="${id}" type="${tipo}" value="${esc(val)}"${extra}>`;
   };
   const d = $('#dlg');
   d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${novo ? esc(cfg.botao) : 'Editar ' + esc(cfg.singular)}</h2>${cfg.campos.map(campo).join('')}<p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar ${esc(cfg.singular)}</button></div></form>`;
   d.showModal();
-  const primeiro = d.querySelector('input,textarea,select'); if (primeiro) primeiro.focus();
+  d.querySelectorAll('.seldata').forEach(montarSelData);
+  const primeiro = d.querySelector('input:not([type=hidden]),textarea,select'); if (primeiro) primeiro.focus();
   $('#cancelar').onclick = () => d.close();
   const erro = t => { $('#erroF').textContent = t; };
   $('#frm').onsubmit = async ev => {
@@ -1026,7 +1044,7 @@ async function viewMembros() {
   let linhas = [], contas = [], logins = {};
   const desenhar = () => {
     $('#contas').innerHTML = contas.length
-      ? `<div class="aviso-pend"><strong>Contas do site sem cadastro (${contas.length})</strong><ul style="margin:.4rem 0 0;padding-left:1.1rem">${contas.map(c => `<li>${esc(c.nome || '(sem nome)')} <span class="suave">· acesso atual: ${ROTULO_ACESSO[c.papel] || c.papel}</span> <button class="btn peq" data-c="${c.id}">Cadastrar</button></li>`).join('')}</ul></div>` : '';
+      ? `<div class="aviso-pend"><strong>Contas do site sem cadastro (${contas.length})</strong><ul style="margin:.4rem 0 0;padding-left:1.1rem">${contas.map(c => `<li>${esc(c.nome || '(sem nome)')} <span class="suave">· acesso atual: ${ROTULO_ACESSO[c.papel] || c.papel}</span> <button class="btn peq" data-c="${c.id}">Cadastrar</button>${c.papel !== 'admin' && c.id !== sessao.user.id ? ` <button class="btn perigo peq" data-neg="${c.id}">Negar</button>` : ''}${contas.filter(x => norm(x.nome) === norm(c.nome)).length > 1 ? ' <span class="pr-pend">nome repetido</span>' : ''}</li>`).join('')}</ul></div>` : '';
     const q = norm($('#busca').value), t = $('#ftipo').value;
     const rs = linhas.filter(m => (!q || norm(m.nome).includes(q) || norm(m.telefone).includes(q)) && (!t || m.tipo === t));
     if (!linhas.length) { $('#lista').innerHTML = '<p class="vazio">Nenhum cadastro ainda. Toque em "Novo cadastro" para incluir a primeira pessoa.</p>'; return; }
@@ -1048,7 +1066,15 @@ async function viewMembros() {
   $('#novo').onclick = () => abrirFormMembro(null, null, carregar);
   $('#busca').oninput = desenhar;
   $('#ftipo').onchange = desenhar;
-  $('#contas').onclick = ev => {
+  $('#contas').onclick = async ev => {
+    const ng = ev.target.closest('button[data-neg]');
+    if (ng) {
+      const c = contas.find(x => x.id === ng.dataset.neg); if (!c) return;
+      if (!(await confirmar(`Negar o cadastro de "${c.nome || '(sem nome)'}"? A conta será apagada. Se a pessoa precisar, ela poderá criar outra.`, 'Negar cadastro'))) return;
+      const {error} = await sb.rpc('admin_negar_cadastro', {p_usuario: c.id});
+      if (error) { aviso(msgErro(error), true); return; }
+      aviso('Cadastro negado.'); carregar(); return;
+    }
     const b = ev.target.closest('button[data-c]'); if (!b) return;
     const c = contas.find(x => x.id === b.dataset.c); if (!c) return;
     abrirFormMembro(null, {nome: c.nome, usuario_id: c.id}, carregar);
@@ -1831,6 +1857,187 @@ async function viewAtividades() {
   desenhar();
 }
 
+/* ---------- Calendário, lua, avisos, contribuição e mensagens ---------- */
+
+const p2 = n => String(n).padStart(2, '0');
+const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+const FASES = ['Lua nova', 'Quarto crescente', 'Lua cheia', 'Quarto minguante'], ICO = ['🌑', '🌓', '🌕', '🌗'];
+const LEMBRETE_LUA = 'Dia de movimentar o Obaroxo';
+const fusoLua = {timeZone: 'America/Sao_Paulo'};
+const meuCad = () => perfil ? (perfil.cad_id || perfil.membro_id || null) : null;
+
+function faseMs(k, f) {
+  const kk = k + f / 4, T = kk / 1236.85, r = Math.PI / 180, s = Math.sin, co = Math.cos;
+  const E = 1 - 0.002516 * T - 0.0000074 * T * T;
+  const M = (2.5534 + 29.1053567 * kk - 0.0000014 * T * T) * r;
+  const Mp = (201.5643 + 385.81693528 * kk + 0.0107582 * T * T) * r;
+  const F = (160.7108 + 390.67050284 * kk - 0.0016118 * T * T) * r;
+  const Om = (124.7746 - 1.56375588 * kk + 0.0020672 * T * T) * r;
+  let jde = 2451550.09766 + 29.530588861 * kk + 0.00015437 * T * T, c;
+  if (f === 0 || f === 2) {
+    const a = f === 0 ? [-0.4072, 0.17241, 0.01608, 0.01039, 0.00739, -0.00514, 0.00208] : [-0.40614, 0.17302, 0.01614, 0.01043, 0.00734, -0.00515, 0.00209];
+    c = a[0] * s(Mp) + a[1] * E * s(M) + a[2] * s(2 * Mp) + a[3] * s(2 * F) + a[4] * E * s(Mp - M) + a[5] * E * s(Mp + M) + a[6] * E * E * s(2 * M)
+      - 0.00111 * s(Mp - 2 * F) - 0.00057 * s(Mp + 2 * F) + 0.00056 * E * s(2 * Mp + M) - 0.00042 * s(3 * Mp) + 0.00042 * E * s(M + 2 * F) + 0.00038 * E * s(M - 2 * F) - 0.00024 * E * s(2 * Mp - M);
+  } else {
+    c = -0.62801 * s(Mp) + 0.17172 * E * s(M) - 0.01183 * E * s(Mp + M) + 0.00862 * s(2 * Mp) + 0.00804 * s(2 * F) + 0.00454 * E * s(Mp - M) + 0.00204 * E * E * s(2 * M)
+      - 0.0018 * s(Mp - 2 * F) - 0.0007 * s(Mp + 2 * F) - 0.0004 * s(3 * Mp) - 0.00034 * E * s(2 * Mp - M) + 0.00032 * E * s(M + 2 * F) + 0.00032 * E * s(M - 2 * F)
+      - 0.00028 * E * E * s(Mp + 2 * M) + 0.00027 * E * s(2 * Mp + M) - 0.00017 * s(Om);
+    const W = 0.00306 - 0.00038 * E * co(M) + 0.00026 * co(Mp) - 0.00002 * co(Mp - M) + 0.00002 * co(Mp + M) + 0.00002 * co(2 * F);
+    c += f === 1 ? W : -W;
+  }
+  return (jde + c - 2440587.5) * 864e5;
+}
+
+function fasesDoMes(a, m) {
+  const k0 = Math.floor((a + m / 12 - 2000) * 12.3685) - 1, pre = `${a}-${p2(m + 1)}`, out = [];
+  for (let k = k0; k <= k0 + 3; k++) for (let f = 0; f < 4; f++) {
+    const ms = faseMs(k, f), d = new Date(ms), iso = d.toLocaleDateString('sv-SE', fusoLua);
+    if (iso.startsWith(pre)) out.push({iso, f, ms, hora: d.toLocaleTimeString('pt-BR', {...fusoLua, hour: '2-digit', minute: '2-digit'})});
+  }
+  return out.sort((x, y) => x.ms - y.ms);
+}
+
+function gradeMes(a, m, fn) {
+  let h = '<div class="cal">' + ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(x => `<b>${x}</b>`).join('');
+  for (let i = 0; i < new Date(a, m, 1).getDay(); i++) h += '<i></i>';
+  for (let d = 1, n = new Date(a, m + 1, 0).getDate(); d <= n; d++) {
+    const iso = `${a}-${p2(m + 1)}-${p2(d)}`, o = fn(iso) || {};
+    h += `<button type="button" class="cd ${o.cls || ''}" data-d="${iso}">${d}${o.html || ''}</button>`;
+  }
+  return h + '</div>';
+}
+
+function montarSelData(box) {
+  const inp = document.getElementById(box.dataset.alvo);
+  let sel = inp.value ? new Date(inp.value) : null;
+  const base = sel || new Date();
+  let ver = new Date(base.getFullYear(), base.getMonth(), 1), hh = sel ? sel.getHours() : 19, mm = sel ? sel.getMinutes() : 30;
+  const grava = () => { inp.value = sel ? `${isoD(sel)}T${p2(hh)}:${p2(mm)}` : ''; };
+  const resumo = () => { const r = box.querySelector('.dsem'); if (r && sel) r.textContent = `${SEM[sel.getDay()]}, ${sel.toLocaleDateString('pt-BR')} às ${p2(hh)}:${p2(mm)}`; };
+  const desenhar = () => {
+    const a = ver.getFullYear(), m = ver.getMonth(), fs = {}, si = sel ? isoD(sel) : '';
+    fasesDoMes(a, m).forEach(x => { fs[x.iso] = x; });
+    const mins = [...Array(12).keys()].map(i => i * 5); if (!mins.includes(mm)) { mins.push(mm); mins.sort((x, y) => x - y); }
+    box.innerHTML = `<div class="cal-cab"><button type="button" class="btn sec peq" data-n="-1" aria-label="Mês anterior">‹</button><strong>${MESES[m]} de ${a}</strong><button type="button" class="btn sec peq" data-n="1" aria-label="Próximo mês">›</button></div>`
+      + gradeMes(a, m, iso => ({cls: iso === si ? 'sel' : iso === hoje() ? 'hj' : '', html: fs[iso] ? `<span class="lua" title="${FASES[fs[iso].f]}">${ICO[fs[iso].f]}</span>` : ''}))
+      + (sel ? `<div class="hora"><label for="${inp.id}_h" style="margin:0">Hora</label><select id="${inp.id}_h">${Array.from({length: 24}, (_, i) => `<option value="${i}"${i === hh ? ' selected' : ''}>${p2(i)}</option>`).join('')}</select>:<select id="${inp.id}_m" aria-label="Minutos">${mins.map(i => `<option value="${i}"${i === mm ? ' selected' : ''}>${p2(i)}</option>`).join('')}</select></div><p class="dsem" aria-live="polite"></p>` : '<p class="suave">Escolha o dia no calendário. Depois defina a hora.</p>');
+    resumo();
+  };
+  box.onclick = e => {
+    const n = e.target.closest('[data-n]'), d = e.target.closest('[data-d]');
+    if (n) { ver = new Date(ver.getFullYear(), ver.getMonth() + Number(n.dataset.n), 1); desenhar(); }
+    else if (d) { sel = new Date(d.dataset.d + 'T00:00:00'); grava(); desenhar(); }
+  };
+  box.onchange = e => {
+    if (e.target.id === inp.id + '_h') hh = Number(e.target.value); else if (e.target.id === inp.id + '_m') mm = Number(e.target.value); else return;
+    grava(); resumo();
+  };
+  grava(); desenhar();
+}
+
+async function viewLua() {
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Calendário lunar</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
+  let ver = new Date(); ver = new Date(ver.getFullYear(), ver.getMonth(), 1);
+  const desenhar = () => {
+    const a = ver.getFullYear(), m = ver.getMonth(), L = fasesDoMes(a, m), mp = {};
+    L.forEach(x => { mp[x.iso] = x; });
+    app.innerHTML = `<h1>Calendário lunar</h1><p class="suave">As quatro fases da lua, no horário de Brasília. Em cada mudança de lua, a partir das 18h, o site avisa: ${LEMBRETE_LUA}.</p>
+      <div class="cal-cab"><button type="button" class="btn sec peq" data-n="-1" aria-label="Mês anterior">‹</button><strong>${MESES[m]} de ${a}</strong><button type="button" class="btn sec peq" data-n="1" aria-label="Próximo mês">›</button></div>`
+      + gradeMes(a, m, iso => ({cls: mp[iso] ? 'fase' : iso === hoje() ? 'hj' : '', html: mp[iso] ? `<span class="lua" title="${FASES[mp[iso].f]}">${ICO[mp[iso].f]}</span>` : ''}))
+      + '<h2 style="margin-top:1rem">Fases do mês</h2>'
+      + L.map(x => `<div class="cartao" style="margin-bottom:.6rem"><strong>${ICO[x.f]} ${FASES[x.f]}</strong> · ${dataBR(x.iso)} às ${x.hora}<br><span class="suave">${LEMBRETE_LUA}</span></div>`).join('');
+    app.querySelectorAll('[data-n]').forEach(b => { b.onclick = () => { ver = new Date(a, m + Number(b.dataset.n), 1); desenhar(); }; });
+  };
+  desenhar();
+}
+
+async function atualizarAvisos() {
+  const el = $('#faixa'); if (!el) return;
+  const itens = [];
+  if (sessao && perfil && ['membro', 'admin'].includes(perfil.papel)) {
+    const ag = new Date(), iso = ag.toLocaleDateString('sv-SE', fusoLua), h = Number(ag.toLocaleTimeString('pt-BR', {...fusoLua, hour: '2-digit', hour12: false}));
+    if (h >= 18) { const f = fasesDoMes(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1).find(x => x.iso === iso); if (f) itens.push(`${ICO[f.f]} ${LEMBRETE_LUA}: hoje é ${FASES[f.f].toLowerCase()}.`); }
+  }
+  const cad = meuCad();
+  if (sessao && perfil && cad) {
+    const [e, p] = await Promise.all([
+      sb.from('eventos').select('id,titulo,data_hora').gte('data_hora', new Date().toISOString()).lte('data_hora', new Date(Date.now() + 3 * 36e5).toISOString()),
+      sb.from('presencas').select('evento_id').eq('membro_id', cad).eq('vai', true)
+    ]);
+    if (!e.error && !p.error) {
+      const ok = new Set(p.data.map(x => x.evento_id));
+      e.data.filter(x => ok.has(x.id)).forEach(x => {
+        const min = Math.max(1, Math.round((new Date(x.data_hora) - Date.now()) / 6e4));
+        itens.push(`⏰ ${esc(x.titulo)} começa em ${min >= 60 ? Math.floor(min / 60) + 'h' + (min % 60 ? p2(min % 60) : '') : min + ' min'} (${_hm(new Date(x.data_hora))}). Você confirmou presença.`);
+      });
+    }
+  }
+  el.innerHTML = itens.map(t => `<div class="faixa-i" role="status">${t}</div>`).join('');
+}
+
+async function viewContribuicao() {
+  const cad = meuCad();
+  if (!sessao || !perfil || !cad) { app.innerHTML = '<div class="cartao estreito"><h1>Contribuição</h1><p>Seu cadastro ainda não está ligado à sua conta. Peça ao administrador para vincular.</p></div>'; return; }
+  app.innerHTML = '<h1>Contribuição</h1><p class="vazio">Carregando…</p>';
+  const {data, error} = await sb.from('lancamentos').select('*').eq('membro_id', cad).eq('tipo', 'receita').order('data', {ascending: false});
+  if (error) { app.innerHTML = `<h1>Contribuição</h1><p class="erro">${esc(msgErro(error))}</p>`; return; }
+  const tot = data.reduce((t, x) => t + Math.round(Number(x.valor) * 100), 0) / 100;
+  app.innerHTML = `<h1>Contribuição</h1><p class="suave">Histórico das suas contribuições e doações registradas pela administração.</p>`
+    + (data.length ? `<div class="totais"><div><span>Total contribuído</span><strong class="ok">${brl(tot)}</strong></div></div><div class="rolagem"><table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th class="num">Valor</th></tr></thead><tbody>${data.map(x => `<tr><td>${esc(dataBR(x.data))}</td><td>${esc(x.descricao)}</td><td>${esc(x.categoria || '')}</td><td class="num">${brl(x.valor)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="vazio">Nenhuma contribuição registrada para o seu cadastro até agora.</p>');
+}
+
+const TP_MSG = {observacao: 'Observação', reclamacao: 'Reclamação', ideia: 'Ideia'};
+
+async function viewMensagens() {
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Mensagens</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
+  app.innerHTML = `<h1>Fale com o pai de santo</h1><p class="suave">Envie uma observação, reclamação ou ideia. Só a administração lê.</p>
+    <form id="frmMsg" class="cartao" novalidate><label for="ms_tp">Tipo</label><select id="ms_tp">${Object.entries(TP_MSG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+    <label for="ms_tx">Mensagem *</label><textarea id="ms_tx" rows="5" maxlength="2000"></textarea><p class="erro" id="erroMsg" role="alert"></p><button class="btn">Enviar mensagem</button></form>
+    <h2 style="margin-top:1.5rem">Minhas mensagens</h2><div id="minhas"><p class="vazio">Carregando…</p></div>`;
+  const carregar = async () => {
+    const {data, error} = await sb.from('mensagens').select('*').eq('autor_id', sessao.user.id).order('criado_em', {ascending: false});
+    $('#minhas').innerHTML = error ? `<p class="erro">${esc(msgErro(error))}</p>` : data.length
+      ? data.map(x => `<article class="cartao" style="margin-bottom:.6rem"><strong>${TP_MSG[x.tipo] || ''}</strong> · <span class="suave">${dataHoraBR(x.criado_em)} · ${x.lida ? 'lida' : 'ainda não lida'}</span><p>${texto(x.texto)}</p></article>`).join('')
+      : '<p class="vazio">Você ainda não enviou mensagens.</p>';
+  };
+  $('#frmMsg').onsubmit = async ev => {
+    ev.preventDefault();
+    const tx = $('#ms_tx').value.trim();
+    if (!tx) { $('#erroMsg').textContent = 'Escreva a mensagem.'; $('#ms_tx').focus(); return; }
+    const btn = ev.target.querySelector('.btn'); btn.disabled = true;
+    const {error} = await sb.from('mensagens').insert({tipo: $('#ms_tp').value, texto: tx, autor_id: sessao.user.id, nome: perfil.nome || null});
+    btn.disabled = false;
+    if (error) { $('#erroMsg').textContent = msgErro(error); return; }
+    $('#erroMsg').textContent = ''; $('#ms_tx').value = ''; aviso('Mensagem enviada.'); carregar();
+  };
+  carregar();
+}
+
+async function viewMensagensAdm() {
+  app.innerHTML = abas('#/admin/mensagens') + `<div class="cab"><h1>Mensagens dos médiuns</h1></div><div class="filtros"><select id="fm" aria-label="Filtrar"><option value="">Todas</option><option value="nova">Não lidas</option>${Object.entries(TP_MSG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  let linhas = [];
+  const desenhar = () => {
+    const f = $('#fm').value, rs = linhas.filter(x => !f || (f === 'nova' ? !x.lida : x.tipo === f));
+    $('#lista').innerHTML = rs.length ? rs.map(x => `<article class="cartao" style="margin-bottom:.6rem"><div class="cab" style="margin:0"><div><strong>${TP_MSG[x.tipo] || ''}</strong> · ${esc(x.nome || 'Sem nome')} · <span class="suave">${dataHoraBR(x.criado_em)}</span>${x.lida ? '' : ' <span class="pr-pend">nova</span>'}</div><div><button class="btn sec peq" data-a="l" data-id="${x.id}">${x.lida ? 'Marcar como não lida' : 'Marcar como lida'}</button> <button class="btn perigo peq" data-a="x" data-id="${x.id}">Excluir</button></div></div><p>${texto(x.texto)}</p></article>`).join('') : '<p class="vazio">Nenhuma mensagem.</p>';
+  };
+  const carregar = async () => {
+    const {data, error} = await sb.from('mensagens').select('*').order('criado_em', {ascending: false});
+    if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
+    linhas = data; desenhar();
+  };
+  $('#fm').onchange = desenhar;
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const x = linhas.find(r => String(r.id) === b.dataset.id); if (!x) return;
+    if (b.dataset.a === 'x' && !(await confirmar('Excluir esta mensagem? Esta ação não pode ser desfeita.', 'Excluir mensagem'))) return;
+    const r = b.dataset.a === 'x' ? await sb.from('mensagens').delete().eq('id', x.id).select() : await sb.from('mensagens').update({lida: !x.lida}).eq('id', x.id).select();
+    if (r.error || !r.data || !r.data.length) { aviso(r.error ? msgErro(r.error) : 'Não foi possível salvar.', true); return; }
+    carregar();
+  };
+  carregar();
+}
+
 /* ---------- Rotas e início ---------- */
 
 const CATS_MAT = {iniciacao:'Iniciação', complementar:'Complementar', gira_desenvolvimento:'Gira de desenvolvimento', biblioteca:'Biblioteca mediúnica'};
@@ -1902,6 +2109,7 @@ const ROTAS = {
   'admin/questionarios': viewQuestionarios,
   'admin/questionarios/entregas': viewEntregas,
   'admin/situacao': viewSituacao,
+  'admin/mensagens': viewMensagensAdm, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
   'atividades': viewAtividades,
   'diario': () => viewTextos('diario'),
   'material': () => viewTextos('material'),
@@ -1953,12 +2161,13 @@ async function iniciar() {
   desenharNav();
   await rotear();
   window.__ok = true;
+  atualizarAvisos(); setInterval(atualizarAvisos, 120000);
   sb.auth.onAuthStateChange((ev, s) => {
     if (ev === 'INITIAL_SESSION' || ev === 'TOKEN_REFRESHED') { if (s) sessao = s; return; }
     const mesmo = (s && s.user && sessao && sessao.user && s.user.id === sessao.user.id);
     sessao = s;
     if (mesmo) return;
-    setTimeout(async () => { await carregarPerfil(); desenharNav(); rotear(); }, 0);
+    setTimeout(async () => { await carregarPerfil(); desenharNav(); rotear(); atualizarAvisos(); }, 0);
   });
 }
 marcarDatas();
