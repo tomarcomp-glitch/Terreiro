@@ -122,6 +122,7 @@ h1,h2{color:var(--verde)}
 .chk{display:flex;gap:.5rem;align-items:center;margin:.25rem 0}fieldset.ent{border:1px solid var(--linha);border-radius:6px;margin:.6rem 0;padding:.5rem .8rem}
 #fichaImp{display:none}
 @media print{body.imp-ficha :is(header,nav,footer,#faixa,.nao-imp){display:none!important}body.imp-ficha #fichaImp{display:block}}
+#vcBanner:not(:empty){position:sticky;top:0;z-index:60;background:#fff3cd;border-bottom:2px solid var(--ouro);padding:.5rem 1rem;display:flex;gap:1rem;align-items:center;justify-content:center;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -130,6 +131,7 @@ h1,h2{color:var(--verde)}
   <button class="btn sec menu-btn" id="menuBtn" aria-expanded="false" aria-controls="nav">Menu</button>
   <nav id="nav" aria-label="Principal"></nav>
 </header>
+<div id="vcBanner"></div>
 <div id="faixa" aria-live="polite"></div>
 <main id="app" tabindex="-1"><p class="vazio">Carregando…</p></main>
 <dialog id="dlg" aria-labelledby="dlgT"></dialog>
@@ -448,7 +450,7 @@ async function limparEventosEncerrados() {
   if (!r.error) aviso(data.length + (data.length === 1 ? ' imagem de evento encerrado foi apagada.' : ' imagens de eventos encerrados foram apagadas.'));
 }
 
-let sessao = null, perfil = null, timerAviso = null;
+let sessao = null, perfil = null, timerAviso = null, verComo = null, perfilReal = null;
 
 function aviso(msg, erro) {
   const a = $('#aviso');
@@ -489,15 +491,18 @@ async function carregarPerfil() {
     const m = await sb.rpc('meu_medium_id'); perfil.membro_id = m.error ? null : m.data;
     const cc = await sb.rpc('meu_cadastro_id'); perfil.cad_id = cc.error ? null : cc.data;
     const pm = await sb.rpc('minhas_permissoes'); perfil.perm = pm.error || !Array.isArray(pm.data) ? [] : pm.data;
+    if (!perfil.perm.length && perfil.cad_id) { const r = await sb.from('membros').select('permissoes').eq('id', perfil.cad_id).maybeSingle(); if (!r.error && r.data && Array.isArray(r.data.permissoes)) perfil.perm = r.data.permissoes; }
   }
+  perfilReal = perfil;
+  if (verComo && perfil && perfil.papel === 'admin') perfil = verComo.perfil;
 }
 
-const ROTA_PERM = {noticias:'#/admin/noticias', eventos:'#/admin/eventos', estoque:'#/admin/estoque'};
+const ROTA_PERM = {noticias:'#/admin/noticias', eventos:'#/admin/eventos', estoque:'#/admin/estoque', recepcao:'#/admin/recepcao'};
 const MOD_ROTA = {'admin/noticias':'noticias', 'admin/eventos':'eventos', 'admin/estoque':'estoque', 'admin/estoque/historico':'estoque', 'admin/estoque/inventario':'estoque', 'admin/recepcao':'recepcao'};
 const pode = m => !!perfil && (perfil.papel === 'admin' || (perfil.perm || []).includes(m));
 function desenharNav() {
   const adm = perfil && perfil.papel === 'admin';
-  const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).find(Boolean) : null;
+  const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).filter(Boolean).sort((a, b) => (a === '#/admin/recepcao') - (b === '#/admin/recepcao'))[0] : null;
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
     + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
     + (sessao && perfil && meuCad() && ['consulente', 'membro'].includes(perfil.papel) ? '<a href="#/contribuicao">Contribuição</a>' : '')
@@ -505,7 +510,7 @@ function desenharNav() {
     + (sessao && perfil && perfil.papel === 'membro' ? '<a href="#/mensagens">Mensagens</a>' : '')
     + (sessao && perfil && perfil.papel === 'membro' && meuCad() ? '<a href="#/corrente">Corrente</a>' : '')
     + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/material">Material</a><a href="#/oracoes">Orações</a><a href="#/diario">Diário</a>' : '')
-    + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">Painel</a>` : '')
+    + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">${colab === '#/admin/recepcao' ? 'Portaria' : 'Painel'}</a>` : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
   if (s) s.onclick = async () => { await sb.auth.signOut(); location.hash = '#/'; };
@@ -704,9 +709,10 @@ async function abrirRespostas(ev, aoMudar) {
 }
 
 function blocoEvento(x, resp) {
+  EVC[x.id] = x;
   const d = new Date(x.data_hora);
   const mes = d.toLocaleDateString('pt-BR', {month:'short'}).replace('.', '');
-  return `<div class="evento"><div class="dia"><b>${d.getDate()}</b>${esc(mes)}</div><div><strong>${esc(x.titulo)}</strong>${x.publico ? '' : ' <span class="suave">(só membros)</span>'}<br><span class="suave">${SEM[d.getDay()]}, ${d.toLocaleDateString('pt-BR')} às ${_hm(d)}${x.local ? ' · ' + esc(x.local) : ''}</span>${imgTag(x.imagem_path, 'img-e')}${x.descricao ? '<br>' + texto(x.descricao) : ''}${widgetPresenca(x, resp)}</div></div>`;
+  return `<div class="evento"><div class="dia"><b>${d.getDate()}</b>${esc(mes)}</div><div><strong>${esc(x.titulo)}</strong>${x.publico ? '' : ' <span class="suave">(só membros)</span>'}<br><span class="suave">${SEM[d.getDay()]}, ${d.toLocaleDateString('pt-BR')} às ${_hm(d)}${x.local ? ' · ' + esc(x.local) : ''}</span>${imgTag(x.imagem_path, 'img-e')}${x.descricao ? '<br>' + texto(x.descricao) : ''}<div class="acoes-n" style="margin-top:.5rem"><button class="btn sec peq" type="button" data-acao="copiar-evento" data-id="${x.id}">Compartilhar evento</button> <button class="btn sec peq" type="button" data-acao="zap-evento" data-id="${x.id}">WhatsApp</button></div>${widgetPresenca(x, resp)}</div></div>`;
 }
 
 async function viewAgenda() {
@@ -769,7 +775,7 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação'],['#/admin/mensagens','Mensagens'],['#/admin/contribuicoes','Contribuições'],['#/admin/recepcao','Recepção'],['#/admin/corrente','Corrente']];
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação'],['#/admin/mensagens','Mensagens'],['#/admin/contribuicoes','Contribuições'],['#/admin/recepcao','Recepção'],['#/admin/corrente','Corrente'],['#/admin/vercomo','Ver como']];
 const abas = atual => '<div class="abas">' + ABAS.filter(([h]) => pode(MOD_ROTA[h.replace(/^#\//, '')])).map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin(h) {
@@ -2272,6 +2278,57 @@ async function viewCorrenteAdm() {
   carregar();
 }
 
+/* ---------- Compartilhar evento e ver como ---------- */
+const EVC = {}, PESSOAIS = ['contribuicao', 'corrente', 'mensagens', 'diario', 'atividades'];
+
+function textoEvento(x) {
+  const d = new Date(x.data_hora), l = [`*${x.titulo}*`, `📅 ${SEM[d.getDay()]}, ${d.toLocaleDateString('pt-BR')} às ${_hm(d)}`];
+  if (x.local) l.push(`📍 ${x.local}`);
+  if (x.descricao) l.push('', x.descricao);
+  l.push('', `🔗 ${location.origin + location.pathname}#/agenda`);
+  return l.join('\n');
+}
+async function copiarEvento(id) {
+  const x = EVC[id]; if (!x) return; const t = textoEvento(x);
+  try { await navigator.clipboard.writeText(t); aviso('Texto copiado. É só colar no WhatsApp.'); } catch (e) { window.prompt('Copie o texto:', t); }
+}
+function zapEvento(id) { const x = EVC[id]; if (x) window.open('https://wa.me/?text=' + encodeURIComponent(textoEvento(x)), '_blank', 'noopener'); }
+
+const bloq = () => {
+  const r = Promise.resolve({data: null, error: {message: 'Modo "ver como": somente leitura, nada foi salvo.'}});
+  const p = new Proxy(r, {get: (t, k) => (k === 'then' || k === 'catch' || k === 'finally') ? t[k].bind(t) : () => p});
+  return p;
+};
+const _sbFrom = sb.from.bind(sb), _sbRpc = sb.rpc.bind(sb);
+sb.from = t => { const q = _sbFrom(t); if (verComo) ['insert', 'update', 'upsert', 'delete'].forEach(m => { q[m] = bloq; }); return q; };
+sb.rpc = (n, a) => verComo && /^(salvar_|pedir_|admin_)/.test(n) ? bloq() : _sbRpc(n, a);
+
+function desenharBanner() {
+  $('#vcBanner').innerHTML = verComo ? `<span><strong>Vendo como ${esc(verComo.nome)}</strong> · somente leitura</span><button class="btn peq" type="button" id="vcSair">Sair do ver como</button>` : '';
+  if (verComo) $('#vcSair').onclick = sairVerComo;
+}
+function irPara(h) { if (location.hash !== h) location.hash = h; else rotear(); }
+function sairVerComo() { verComo = null; if (perfilReal) perfil = perfilReal; desenharBanner(); desenharNav(); atualizarAvisos(); irPara('#/admin/vercomo'); }
+
+async function viewVerComo() {
+  if (!exigirAdmin('admin/vercomo')) return;
+  app.innerHTML = abas('#/admin/vercomo') + '<div class="cab"><h1>Ver como</h1></div><p class="suave">Escolha um usuário para ver o site como ele vê. É somente leitura e as telas pessoais (contribuição, ficha, mensagens, diário e atividades) ficam ocultas.</p><label for="busca">Buscar</label><input id="busca" type="search" autocomplete="off"><div id="lista"><p class="vazio">Carregando…</p></div>';
+  const [p, m] = await Promise.all([sb.from('profiles').select('*'), sb.from('membros').select('id,nome,tipo,usuario_id,permissoes').not('usuario_id', 'is', null).order('nome')]);
+  if (p.error || m.error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(p.error || m.error))}</p>`; return; }
+  const us = m.data.map(x => ({m: x, p: p.data.find(y => y.id === x.usuario_id)})).filter(x => x.p && x.p.id !== sessao.user.id);
+  const desenhar = () => {
+    const t = norm($('#busca').value), l = us.filter(x => norm(x.m.nome).includes(t));
+    $('#lista').innerHTML = l.length ? l.map(x => `<div class="cartao" style="margin-bottom:.5rem"><div class="cab" style="margin:0"><div><strong>${esc(x.m.nome)}</strong><br><span class="suave">${esc(x.m.tipo)} · acesso: ${esc(x.p.papel)}${(Array.isArray(x.m.permissoes) && x.m.permissoes.length) ? ' · ' + esc(x.m.permissoes.join(', ')) : ''}</span></div><button class="btn peq" data-id="${x.m.id}">Ver como</button></div></div>`).join('') : '<p class="vazio">Nenhum usuário com conta.</p>';
+  };
+  $('#busca').oninput = desenhar; desenhar();
+  $('#lista').onclick = ev => {
+    const b = ev.target.closest('button[data-id]'); if (!b) return;
+    const x = us.find(y => String(y.m.id) === b.dataset.id); if (!x) return;
+    verComo = {nome: x.m.nome, perfil: {...x.p, nome: x.m.nome, membro_id: x.m.tipo === 'medium' ? x.m.id : null, cad_id: x.m.id, perm: Array.isArray(x.m.permissoes) ? x.m.permissoes : []}};
+    perfil = verComo.perfil; desenharBanner(); desenharNav(); atualizarAvisos(); irPara('#/');
+  };
+}
+
 /* ---------- Rotas e início ---------- */
 
 const CATS_MAT = {iniciacao:'Iniciação', complementar:'Complementar', gira_desenvolvimento:'Gira de desenvolvimento', biblioteca:'Biblioteca mediúnica'};
@@ -2343,7 +2400,7 @@ const ROTAS = {
   'admin/questionarios': viewQuestionarios,
   'admin/questionarios/entregas': viewEntregas,
   'admin/situacao': viewSituacao,
-  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/corrente': viewCorrenteAdm, 'corrente': viewCorrente, 'admin/contribuicoes': viewContribAdm, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
+  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/vercomo': viewVerComo, 'admin/corrente': viewCorrenteAdm, 'corrente': viewCorrente, 'admin/contribuicoes': viewContribAdm, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
   'atividades': viewAtividades,
   'diario': () => viewTextos('diario'),
   'material': () => viewTextos('material'),
@@ -2363,6 +2420,7 @@ async function rotear() {
   document.title = CONFIG.nome;
   if (!f) { location.hash = '#/'; return; }
   if (h === 'entrar' && sessao) { location.hash = '#/'; return; }
+  if (verComo && PESSOAIS.includes(h)) { app.innerHTML = '<div class="cartao estreito"><h1>Dados pessoais ocultos</h1><p>No modo "ver como", as telas pessoais não são mostradas.</p></div>'; return; }
   if (adm && !exigirAdmin(h)) return;
   if (perfil && perfil.papel === 'admin') limparEventosEncerrados();
   await f();
@@ -2384,6 +2442,8 @@ async function iniciar() {
     const b = ev.target.closest('button[data-acao]'); if (!b) return;
     if (b.dataset.acao === 'curtir') alternarCurtida(b);
     else if (b.dataset.acao === 'compartilhar') compartilhar(Number(b.dataset.id), b.dataset.titulo);
+    else if (b.dataset.acao === 'copiar-evento') copiarEvento(Number(b.dataset.id));
+    else if (b.dataset.acao === 'zap-evento') zapEvento(Number(b.dataset.id));
     else if (b.dataset.acao === 'irei') salvarPresenca(Number(b.dataset.id), true, null, b.closest('.presenca'));
     else if (b.dataset.acao === 'naoirei') { const w = b.closest('.presenca'); w.querySelector('.pr-motivo').hidden = false; w.querySelector('input').focus(); }
     else if (b.dataset.acao === 'salvar-motivo') {
