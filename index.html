@@ -473,7 +473,8 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
-  if (/admin_negar_cadastro|meu_cadastro_id|mensagens|contribuicoes_info/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
+  if (/contribuicoes_info/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes3.sql no Supabase.';
+  if (/admin_negar_cadastro|meu_cadastro_id|mensagens/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
   if (/lista_incorporantes|medium_id/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes2.sql no Supabase.';
   if (/salvar_minha_ficha|salvar_minha_foto|pedir_alteracao_ficha|ficha_mediunica|entidades_catalogo|astral/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes5.sql no Supabase.';
   if (/incorporantes_confirmados|relatorio_recepcao/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes4.sql no Supabase.';
@@ -510,6 +511,7 @@ function desenharNav() {
     + (sessao && perfil && perfil.papel === 'membro' ? '<a href="#/mensagens">Mensagens</a>' : '')
     + (sessao && perfil && perfil.papel === 'membro' && meuCad() ? '<a href="#/corrente">Corrente</a>' : '')
     + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/material">Material</a><a href="#/oracoes">Orações</a><a href="#/diario">Diário</a>' : '')
+    + (sessao && perfil && perfil.papel === 'consulente' ? '<a href="#/oracoes">Orações</a>' : '')
     + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">${colab === '#/admin/recepcao' ? 'Portaria' : 'Painel'}</a>` : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
@@ -617,9 +619,9 @@ function widgetPresenca(x, resp) {
   const r = resp.get(x.id);
   return `<div class="presenca">${perfil.papel === 'consulente' ? `<label for="med_${x.id}">Médium que vai atender você *</label><select id="med_${x.id}" data-acao="medium"><option value="">Escolha o médium…</option><option value="astral"${r && r.astral ? ' selected' : ''}>Deixar o astral decidir</option>${INCORP.filter(i => i.evento_id === x.id).map(i => `<option value="${i.id}"${r && r.medium_id === i.id ? ' selected' : ''}>${esc(i.nome)}</option>`).join('')}</select>` : ''}<div class="pr-linha"><strong>Sua presença:</strong>
     <button class="btn sec peq" data-acao="irei" data-id="${x.id}" aria-pressed="${!!(r && r.vai)}">Irei</button>
-    <button class="btn sec peq" data-acao="naoirei" data-id="${x.id}" aria-pressed="${!!(r && !r.vai)}">Não irei</button></div>
-    <div class="pr-motivo"${r && !r.vai ? '' : ' hidden'}><label for="mot_${x.id}">Motivo (obrigatório)</label><input id="mot_${x.id}" maxlength="200" value="${esc(r && !r.vai ? r.motivo : '')}"><button class="btn peq" data-acao="salvar-motivo" data-id="${x.id}">Salvar motivo</button></div>
-    <p class="pr-msg ${r ? 'suave' : 'pr-pend'}">${msgPresenca(r)}</p></div>`;
+    ${perfil.papel === 'consulente' ? `<button class="btn sec peq" data-acao="desmarcar" data-id="${x.id}"${r && r.vai ? '' : ' hidden'}>Desmarcar presença</button>` : `<button class="btn sec peq" data-acao="naoirei" data-id="${x.id}" aria-pressed="${!!(r && !r.vai)}">Não irei</button>`}</div>
+    <div class="pr-motivo"${perfil.papel !== 'consulente' && r && !r.vai ? '' : ' hidden'}><label for="mot_${x.id}">Motivo (obrigatório)</label><input id="mot_${x.id}" maxlength="200" value="${esc(r && !r.vai ? r.motivo : '')}"><button class="btn peq" data-acao="salvar-motivo" data-id="${x.id}">Salvar motivo</button></div>
+    <p class="pr-msg ${r ? 'suave' : 'pr-pend'}">${perfil.papel === 'consulente' ? (r && r.vai ? 'Presença confirmada.' : 'Escolha o médium e toque em Irei para confirmar.') : msgPresenca(r)}</p></div>`;
 }
 
 async function salvarPresenca(id, vai, motivo, wrap) {
@@ -634,10 +636,12 @@ async function salvarPresenca(id, vai, motivo, wrap) {
   botoes.forEach(b => { b.disabled = false; });
   if (error) { aviso(msgErro(error), true); return; }
   wrap.querySelector('[data-acao=irei]').setAttribute('aria-pressed', String(vai));
-  wrap.querySelector('[data-acao=naoirei]').setAttribute('aria-pressed', String(!vai));
-  wrap.querySelector('.pr-motivo').hidden = vai;
+  const ni = wrap.querySelector('[data-acao=naoirei]'), dm = wrap.querySelector('[data-acao=desmarcar]');
+  if (ni) ni.setAttribute('aria-pressed', String(!vai));
+  if (dm) dm.hidden = !vai;
+  wrap.querySelector('.pr-motivo').hidden = vai || perfil.papel === 'consulente';
   const m = wrap.querySelector('.pr-msg');
-  m.textContent = msgPresenca({vai, motivo}); m.className = 'pr-msg suave';
+  m.textContent = perfil.papel === 'consulente' ? (vai ? 'Presença confirmada.' : 'Presença desmarcada.') : msgPresenca({vai, motivo}); m.className = 'pr-msg suave';
   aviso('Resposta registrada.');
 }
 
@@ -2073,9 +2077,9 @@ async function viewContribuicao() {
 
 async function viewContribAdm() {
   app.innerHTML = abas('#/admin/contribuicoes') + `<div class="cab"><h1>Contribuições</h1></div>
-    <section class="cartao" style="margin-bottom:1rem"><h2>Chave PIX</h2><p class="suave">Aparece para os consulentes na tela Contribuição.</p>
-    <form id="frmP" novalidate><label for="px_ch">Chave PIX</label><input id="px_ch" autocomplete="off"><label for="px_fav">Favorecido (opcional)</label><input id="px_fav" autocomplete="off"><p class="erro" id="erroP" role="alert"></p><button class="btn">Salvar chave PIX</button></form></section>
-    <h2>Avisos de contribuição</h2><div id="lista"><p class="vazio">Carregando…</p></div>`;
+    <h2>Avisos de contribuição</h2><div id="lista"><p class="vazio">Carregando…</p></div>
+    <section class="cartao" style="margin:1.5rem 0 1rem"><h2>Chave PIX</h2><p class="suave">Aparece para os consulentes na tela Contribuição.</p>
+    <form id="frmP" novalidate><label for="px_ch">Chave PIX</label><input id="px_ch" autocomplete="off"><label for="px_fav">Favorecido (opcional)</label><input id="px_fav" autocomplete="off"><p class="erro" id="erroP" role="alert"></p><button class="btn">Salvar chave PIX</button></form></section>`;
   pixInfo().then(o => { $('#px_ch').value = o.pix_chave || ''; $('#px_fav').value = o.pix_favorecido || ''; });
   $('#frmP').onsubmit = async ev => {
     ev.preventDefault();
@@ -2340,7 +2344,7 @@ const TEXTOS = {
 
 async function viewTextos(chave) {
   const c = TEXTOS[chave];
-  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) {
+  if (!sessao || !perfil || !(['membro', 'admin'].includes(perfil.papel) || (chave === 'oracoes' && perfil.papel === 'consulente'))) {
     app.innerHTML = `<div class="cartao estreito"><h1>${esc(c.titulo)}</h1><p>Esta área é para médiuns. Entre com a sua conta ou peça ao administrador para liberar o acesso.</p></div>`; return;
   }
   const gerencia = !c.perm || pode(c.perm);
@@ -2442,6 +2446,7 @@ async function iniciar() {
     const b = ev.target.closest('button[data-acao]'); if (!b) return;
     if (b.dataset.acao === 'curtir') alternarCurtida(b);
     else if (b.dataset.acao === 'compartilhar') compartilhar(Number(b.dataset.id), b.dataset.titulo);
+    else if (b.dataset.acao === 'desmarcar') salvarPresenca(Number(b.dataset.id), false, 'Desmarcou a presença', b.closest('.presenca'));
     else if (b.dataset.acao === 'copiar-evento') copiarEvento(Number(b.dataset.id));
     else if (b.dataset.acao === 'zap-evento') zapEvento(Number(b.dataset.id));
     else if (b.dataset.acao === 'irei') salvarPresenca(Number(b.dataset.id), true, null, b.closest('.presenca'));
