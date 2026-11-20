@@ -473,6 +473,7 @@ function msgErro(e) {
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
+  if (/corrente_travada|limpeza_|'resposta'|respondida_em/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes8.sql no Supabase.';
   if (/contribuicoes_info/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes3.sql no Supabase.';
   if (/admin_negar_cadastro|meu_cadastro_id|mensagens/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
   if (/lista_incorporantes|medium_id/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes2.sql no Supabase.';
@@ -499,21 +500,22 @@ async function carregarPerfil() {
   if (verComo && perfil && perfil.papel === 'admin') perfil = verComo.perfil;
 }
 
-const ROTA_PERM = {noticias:'#/admin/noticias', eventos:'#/admin/eventos', estoque:'#/admin/estoque', recepcao:'#/admin/recepcao'};
-const MOD_ROTA = {'admin/noticias':'noticias', 'admin/eventos':'eventos', 'admin/estoque':'estoque', 'admin/estoque/historico':'estoque', 'admin/estoque/inventario':'estoque', 'admin/recepcao':'recepcao'};
+const MOD_ROTA = {'admin/estoque':'estoque', 'admin/estoque/historico':'estoque', 'admin/estoque/inventario':'estoque', 'admin/recepcao':'recepcao'};
 const pode = m => !!perfil && (perfil.papel === 'admin' || (perfil.perm || []).includes(m));
 function desenharNav() {
-  const adm = perfil && perfil.papel === 'admin';
-  const colab = !adm && perfil ? (perfil.perm || []).map(k => ROTA_PERM[k]).filter(Boolean).sort((a, b) => (a === '#/admin/recepcao') - (b === '#/admin/recepcao'))[0] : null;
+  const adm = perfil && perfil.papel === 'admin', mb = !!(sessao && perfil && ['membro', 'admin'].includes(perfil.papel));
   nav.innerHTML = '<a href="#/">Início</a><a href="#/agenda">Agenda</a>'
     + (sessao && perfil && perfil.membro_id ? '<a href="#/atividades">Atividades</a>' : '')
     + (sessao && perfil && meuCad() && ['consulente', 'membro'].includes(perfil.papel) ? '<a href="#/contribuicao">Contribuição</a>' : '')
-    + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/lua">Lua</a>' : '')
+    + (mb ? '<a href="#/lua">Lua</a>' : '')
     + (sessao && perfil && perfil.papel === 'membro' ? '<a href="#/mensagens">Mensagens</a>' : '')
-    + (sessao && perfil && perfil.papel === 'membro' && meuCad() ? '<a href="#/corrente">Corrente</a><a href="#/meucadastro">Meu cadastro</a>' : '')
-    + (sessao && perfil && ['membro', 'admin'].includes(perfil.papel) ? '<a href="#/material">Material</a><a href="#/oracoes">Orações</a><a href="#/ervas">Ervas</a><a href="#/pontos">Pontos cantados</a><a href="#/diario">Diário</a>' : '')
+    + (mb ? '<a href="#/corrente">Corrente</a>' : '')
+    + (sessao && perfil && perfil.papel === 'membro' && meuCad() ? '<a href="#/meucadastro">Meu cadastro</a>' : '')
+    + (mb ? '<a href="#/biblioteca">Biblioteca</a><a href="#/oracoes">Orações</a><a href="#/ervas">Ervas</a><a href="#/pontos">Pontos cantados</a><a href="#/diario">Diário</a><a href="#/limpeza">Limpeza</a>' : '')
     + (sessao && perfil && perfil.papel === 'consulente' ? '<a href="#/oracoes">Orações</a><a href="#/pontos">Pontos cantados</a>' : '')
-    + (adm ? '<a href="#/admin/noticias">Painel</a>' : colab ? `<a href="${colab}">${colab === '#/admin/recepcao' ? 'Portaria' : 'Painel'}</a>` : '')
+    + (sessao && pode('estoque') ? '<a href="#/admin/estoque">Estoque</a>' : '')
+    + (sessao && pode('recepcao') ? '<a href="#/admin/recepcao">Recepção</a>' : '')
+    + (adm ? '<a href="#/admin/noticias">Painel</a>' : '')
     + (sessao ? '<a href="#/senha">Senha</a>' : '')
     + (sessao ? '<button class="link" id="sair" type="button">Sair</button>' : '<a href="#/entrar">Entrar</a>');
   const s = $('#sair');
@@ -781,8 +783,8 @@ function viewEntrar() {
 
 /* ---------- Painel administrativo ---------- */
 
-const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/estoque','Estoque'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação'],['#/admin/mensagens','Mensagens'],['#/admin/recepcao','Recepção'],['#/admin/corrente','Corrente'],['#/admin/vercomo','Ver como']];
-const abas = atual => '<div class="abas">' + ABAS.filter(([h]) => pode(MOD_ROTA[h.replace(/^#\//, '')])).map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
+const ABAS = [['#/admin/noticias','Notícias'],['#/admin/eventos','Eventos'],['#/admin/membros','Membros'],['#/admin/financeiro','Financeiro'],['#/admin/relatorios','Relatórios'],['#/admin/questionarios','Questionários'],['#/admin/situacao','Situação'],['#/admin/mensagens','Mensagens'],['#/admin/vercomo','Ver como']];
+const abas = atual => /^#\/admin\/(estoque|recepcao|corrente)(\/|$)/.test(atual) ? '' : '<div class="abas">' + ABAS.filter(([h]) => pode(MOD_ROTA[h.replace(/^#\//, '')])).map(([h, t]) => `<a href="${h}"${h === atual ? ' aria-current="page"' : ''}>${t}</a>`).join('') + '</div>';
 
 function exigirAdmin(h) {
   if (!sessao) { app.innerHTML = '<div class="cartao estreito"><h1>Painel</h1><p>Entre com a conta de administrador para acessar.</p><a class="btn" href="#/entrar">Entrar</a></div>'; return false; }
@@ -1143,8 +1145,8 @@ async function abrirFormMembro(row, pre, aoSalvar) {
       <h3>Grau mediúnico</h3>
       <select id="m_grau" aria-label="Grau mediúnico"><option value="">Não informado</option>${Object.entries(T.graus).map(([k, v]) => `<option value="${k}"${String(r.grau) === k ? ' selected' : ''}>${esc(v.r)}</option>`).join('')}</select>
       <p class="ajuda" id="exGrau"></p>
-      <label class="chk op"><input type="checkbox" id="m_acesso"${r.acesso_admin ? ' checked' : ''}><span><strong>Acesso de administrador no site</strong><small>Libera o painel completo (cadastros, financeiro, estoque). Marque apenas para quem administra a casa, como o dirigente.</small></span></label>
-      <fieldset class="perm"><legend><strong>Colaborador: o que este médium pode gerenciar</strong></legend><p class="ajuda">Sem marcar nada, é um médium comum. Não precisa marcar se for administrador.</p>${[['noticias','Notícias'],['eventos','Eventos'],['estoque','Estoque'],['material','Material de estudo (publicar)'],['oracoes','Orações (publicar)'],['recepcao','Recepção (relatório da gira)']].map(([k, t]) => `<label class="chk"><input type="checkbox" class="m_perm" value="${k}"${(r.permissoes || []).includes(k) ? ' checked' : ''}>${t}</label>`).join('')}</fieldset>
+      <label class="chk op"><input type="checkbox" id="m_acesso"${r.acesso_admin ? ' checked' : ''}><span><strong>Acesso de administrador no site</strong><small>Libera o Painel completo (cadastros, financeiro, relatórios). Marque apenas para quem administra a casa.</small></span></label>
+      <fieldset class="perm"><legend><strong>Colaborador: abas do menu que este médium pode gerenciar</strong></legend><p class="ajuda">Sem marcar nada, é um médium comum. O Painel é só do administrador.</p>${[['estoque','Estoque'],['recepcao','Recepção (relatório da gira)'],['limpeza','Limpeza (responsável pelas 4 equipes)'],['material','Biblioteca (publicar)'],['oracoes','Orações (publicar)']].map(([k, t]) => `<label class="chk"><input type="checkbox" class="m_perm" value="${k}"${(r.permissoes || []).includes(k) ? ' checked' : ''}>${t}</label>`).join('')}</fieldset>
     </div>
     <div class="sec-m" id="sec_consulente" hidden><h3>Função</h3>${grupo('f_con', pick(T.funcoes, ['contribuinte', 'nao_contribuinte']), f, 'radio')}</div>
     <label for="m_tel">Telefone</label><input id="m_tel" type="tel" value="${esc(r.telefone || '')}" inputmode="tel">
@@ -2128,14 +2130,14 @@ const TP_MSG = {observacao: 'Observação', reclamacao: 'Reclamação', ideia: '
 
 async function viewMensagens() {
   if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Mensagens</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
-  app.innerHTML = `<h1>Fale com o pai de santo</h1><p class="suave">Envie uma observação, reclamação ou ideia. Só a administração lê.</p>
+  app.innerHTML = `<h1>Fale com o pai de santo</h1><p class="suave">Envie uma observação, reclamação ou ideia. Só a administração lê. Quando o pai de santo responder, a resposta aparece abaixo da sua mensagem.</p>
     <form id="frmMsg" class="cartao" novalidate><label for="ms_tp">Tipo</label><select id="ms_tp">${Object.entries(TP_MSG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
     <label for="ms_tx">Mensagem *</label><textarea id="ms_tx" rows="5" maxlength="2000"></textarea><p class="erro" id="erroMsg" role="alert"></p><button class="btn">Enviar mensagem</button></form>
     <h2 style="margin-top:1.5rem">Minhas mensagens</h2><div id="minhas"><p class="vazio">Carregando…</p></div>`;
   const carregar = async () => {
     const {data, error} = await sb.from('mensagens').select('*').eq('autor_id', sessao.user.id).order('criado_em', {ascending: false});
     $('#minhas').innerHTML = error ? `<p class="erro">${esc(msgErro(error))}</p>` : data.length
-      ? data.map(x => `<article class="cartao" style="margin-bottom:.6rem"><strong>${TP_MSG[x.tipo] || ''}</strong> · <span class="suave">${dataHoraBR(x.criado_em)} · ${x.lida ? 'lida' : 'ainda não lida'}</span><p>${texto(x.texto)}</p></article>`).join('')
+      ? data.map(x => `<article class="cartao" style="margin-bottom:.6rem"><strong>${TP_MSG[x.tipo] || ''}</strong> · <span class="suave">${dataHoraBR(x.criado_em)} · ${x.resposta ? 'respondida' : x.lida ? 'lida' : 'ainda não lida'}</span><p>${texto(x.texto)}</p>${x.resposta ? `<div class="alerta-pres" style="border-color:var(--ouro);margin:.6rem 0 0"><strong>Resposta do pai de santo</strong> · <span class="suave">${x.respondida_em ? dataHoraBR(x.respondida_em) : ''}</span><p>${texto(x.resposta)}</p></div>` : ''}</article>`).join('')
       : '<p class="vazio">Você ainda não enviou mensagens.</p>';
   };
   $('#frmMsg').onsubmit = async ev => {
@@ -2152,21 +2154,37 @@ async function viewMensagens() {
 }
 
 async function viewMensagensAdm() {
-  app.innerHTML = abas('#/admin/mensagens') + `<div class="cab"><h1>Mensagens dos médiuns</h1></div><div class="filtros"><select id="fm" aria-label="Filtrar"><option value="">Todas</option><option value="nova">Não lidas</option>${Object.entries(TP_MSG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  app.innerHTML = abas('#/admin/mensagens') + `<div class="cab"><h1>Mensagens dos médiuns</h1></div><div class="filtros"><select id="fm" aria-label="Filtrar"><option value="">Todas</option><option value="nova">Não lidas</option><option value="semresp">Sem resposta</option>${Object.entries(TP_MSG).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div><div id="lista"><p class="vazio">Carregando…</p></div>`;
   let linhas = [];
   const desenhar = () => {
-    const f = $('#fm').value, rs = linhas.filter(x => !f || (f === 'nova' ? !x.lida : x.tipo === f));
-    $('#lista').innerHTML = rs.length ? rs.map(x => `<article class="cartao" style="margin-bottom:.6rem"><div class="cab" style="margin:0"><div><strong>${TP_MSG[x.tipo] || ''}</strong> · ${esc(x.nome || 'Sem nome')} · <span class="suave">${dataHoraBR(x.criado_em)}</span>${x.lida ? '' : ' <span class="pr-pend">nova</span>'}</div><div><button class="btn sec peq" data-a="l" data-id="${x.id}">${x.lida ? 'Marcar como não lida' : 'Marcar como lida'}</button> <button class="btn perigo peq" data-a="x" data-id="${x.id}">Excluir</button></div></div><p>${texto(x.texto)}</p></article>`).join('') : '<p class="vazio">Nenhuma mensagem.</p>';
+    const f = $('#fm').value, rs = linhas.filter(x => !f || (f === 'nova' ? !x.lida : f === 'semresp' ? !x.resposta : x.tipo === f));
+    $('#lista').innerHTML = rs.length ? rs.map(x => `<article class="cartao" style="margin-bottom:.6rem"><div class="cab" style="margin:0"><div><strong>${TP_MSG[x.tipo] || ''}</strong> · ${esc(x.nome || 'Sem nome')} · <span class="suave">${dataHoraBR(x.criado_em)}</span>${x.lida ? '' : ' <span class="pr-pend">nova</span>'}</div><div><button class="btn peq" data-a="r" data-id="${x.id}">${x.resposta ? 'Editar resposta' : 'Responder'}</button> <button class="btn sec peq" data-a="l" data-id="${x.id}">${x.lida ? 'Marcar como não lida' : 'Marcar como lida'}</button> <button class="btn perigo peq" data-a="x" data-id="${x.id}">Excluir</button></div></div><p>${texto(x.texto)}</p>${x.resposta ? `<div class="alerta-pres" style="border-color:var(--ouro);margin:.6rem 0 0"><strong>Sua resposta</strong> · <span class="suave">${x.respondida_em ? dataHoraBR(x.respondida_em) : ''}</span><p>${texto(x.resposta)}</p></div>` : ''}</article>`).join('') : '<p class="vazio">Nenhuma mensagem.</p>';
   };
   const carregar = async () => {
     const {data, error} = await sb.from('mensagens').select('*').order('criado_em', {ascending: false});
     if (error) { $('#lista').innerHTML = `<p class="erro">${esc(msgErro(error))}</p>`; return; }
     linhas = data; desenhar();
   };
+  const responder = x => {
+    const d = $('#dlg'); d.onclick = null; d.onclose = null;
+    d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${x.resposta ? 'Editar resposta' : 'Responder mensagem'}</h2><p class="suave"><strong>${esc(x.nome || 'Sem nome')}</strong> · ${TP_MSG[x.tipo] || ''} · ${dataHoraBR(x.criado_em)}</p><p>${texto(x.texto)}</p><label for="rs_tx">Sua resposta *</label><textarea id="rs_tx" rows="6" maxlength="2000">${esc(x.resposta || '')}</textarea><p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Enviar resposta</button></div></form>`;
+    d.showModal(); $('#rs_tx').focus();
+    $('#cancelar').onclick = () => d.close();
+    $('#frm').onsubmit = async ev => {
+      ev.preventDefault();
+      const tx = $('#rs_tx').value.trim();
+      if (!tx) { $('#erroF').textContent = 'Escreva a resposta.'; return; }
+      const btn = $('#salvar'); btn.disabled = true;
+      const r = await sb.from('mensagens').update({resposta: tx, respondida_em: new Date().toISOString(), lida: true}).eq('id', x.id).select();
+      if (r.error || !r.data || !r.data.length) { $('#erroF').textContent = r.error ? msgErro(r.error) : 'Não foi possível salvar a resposta.'; btn.disabled = false; return; }
+      d.close(); aviso('Resposta enviada.'); carregar();
+    };
+  };
   $('#fm').onchange = desenhar;
   $('#lista').onclick = async ev => {
     const b = ev.target.closest('button[data-a]'); if (!b) return;
     const x = linhas.find(r => String(r.id) === b.dataset.id); if (!x) return;
+    if (b.dataset.a === 'r') { responder(x); return; }
     if (b.dataset.a === 'x' && !(await confirmar('Excluir esta mensagem? Esta ação não pode ser desfeita.', 'Excluir mensagem'))) return;
     const r = b.dataset.a === 'x' ? await sb.from('mensagens').delete().eq('id', x.id).select() : await sb.from('mensagens').update({lida: !x.lida}).eq('id', x.id).select();
     if (r.error || !r.data || !r.data.length) { aviso(r.error ? msgErro(r.error) : 'Não foi possível salvar.', true); return; }
@@ -2245,15 +2263,35 @@ async function montarFicha(box, cad, admin) {
   };
 }
 
+async function montarCorrenteCasa(box) {
+  const [r, c] = await Promise.all([sb.rpc('corrente_travada'), sb.from('entidades_catalogo').select('*')]);
+  const er = r.error || c.error;
+  if (er) { box.innerHTML = `<p class="erro" role="alert">${esc(msgErro(er))}</p>`; return; }
+  const L = Array.isArray(r.data) ? r.data : [], cat = new Map(c.data.map(x => [x.id, x]));
+  if (!L.length) { box.innerHTML = '<p class="vazio">Nenhuma ficha travada ainda.</p>'; return; }
+  box.innerHTML = '<input id="cBusca" type="search" placeholder="Buscar médium" aria-label="Buscar médium" style="max-width:320px;margin-bottom:.8rem"><div id="cLista"></div>';
+  const desenhar = () => {
+    const t = norm($('#cBusca').value), l = L.filter(f => norm(f.nome).includes(t) || norm(f.nome_iniciatico || '').includes(t));
+    $('#cLista').innerHTML = l.length ? l.map(f => {
+      const ents = (Array.isArray(f.entidades) ? f.entidades : []).map(id => cat.get(id)).filter(Boolean);
+      return `<article class="cartao" style="margin-bottom:.6rem">${fotoImg(f.foto, 56)}<strong>${esc(f.nome)}</strong> · <span class="suave">${esc(f.nome_iniciatico || 'sem nome iniciático')} · ${esc(f.grau || 'sem grau')}</span>${TIPOS_ENT.filter(tp => ents.some(x => x.tipo === tp)).map(tp => `<p style="margin:.3rem 0"><strong>${tp}:</strong> ${ents.filter(x => x.tipo === tp).map(x => esc(x.nome)).join(', ')}</p>`).join('')}</article>`;
+    }).join('') : '<p class="vazio">Nenhum médium encontrado.</p>';
+  };
+  $('#cBusca').oninput = desenhar; desenhar();
+}
+
 async function viewCorrente() {
-  if (!sessao || !perfil || !meuCad() || perfil.papel !== 'membro') { app.innerHTML = '<div class="cartao estreito"><h1>Corrente mediúnica</h1><p>Esta área é para médiuns com cadastro ligado à conta.</p></div>'; return; }
-  app.innerHTML = '<h1>Corrente mediúnica</h1><div id="ficha"><p class="vazio">Carregando…</p></div>';
-  montarFicha($('#ficha'), meuCad(), false);
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Corrente mediúnica</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
+  if (perfil.papel === 'admin') { await viewCorrenteAdm(); return; }
+  const minha = !!meuCad();
+  app.innerHTML = '<h1>Corrente mediúnica</h1>' + (minha ? '<h2>Minha ficha</h2><div id="ficha"><p class="vazio">Carregando…</p></div>' : '') + '<h2 style="margin-top:1.5rem">Corrente da casa</h2><p class="suave">Fichas dos médiuns que o administrador já travou. Somente leitura.</p><div id="casa"><p class="vazio">Carregando…</p></div>';
+  if (minha) montarFicha($('#ficha'), meuCad(), false);
+  montarCorrenteCasa($('#casa'));
 }
 
 async function viewCorrenteAdm() {
   if (!exigirAdmin('admin/corrente')) return;
-  app.innerHTML = abas('#/admin/corrente') + '<div class="cab"><h1>Corrente mediúnica</h1></div><div id="lista"><p class="vazio">Carregando…</p></div><div id="detalhe"></div><h2 style="margin-top:1.5rem">Entidades cadastradas</h2><div id="catalogo"></div>';
+  app.innerHTML = '<div class="cab"><h1>Corrente mediúnica</h1></div><p class="suave">Os médiuns só enxergam a ficha de cada um depois que ela é travada.</p><div id="lista"><p class="vazio">Carregando…</p></div><div id="detalhe"></div><h2 style="margin-top:1.5rem">Entidades cadastradas</h2><div id="catalogo"></div>';
   let M = [], F = {}, C = [];
   const lista = () => {
     $('#lista').innerHTML = M.length ? M.map(x => { const f = F[x.id] || {}; return `<div class="cartao" style="margin-bottom:.5rem"><div class="cab" style="margin:0"><div>${fotoImg(f.foto, 36)}<strong>${esc(x.nome)}</strong> · <span class="suave">${esc(f.nome_iniciatico || 'sem nome iniciático')} · ${esc(f.grau || 'sem grau')}</span><br>${f.travada ? '<span class="ok">Travada</span>' : '<span class="pr-pend">Aberta</span>'}${f.pedido ? ' <span class="pr-pend">pediu alteração</span>' : ''}</div><div><button class="btn sec peq" data-a="ab" data-id="${x.id}">Abrir ficha</button> <button class="btn peq" data-a="tr" data-id="${x.id}">${f.travada ? 'Liberar' : 'Travar'}</button></div></div></div>`; }).join('') : '<p class="vazio">Nenhum médium cadastrado.</p>';
@@ -2285,6 +2323,47 @@ async function viewCorrenteAdm() {
     }
     if (r.error) { aviso(msgErro(r.error), true); return; }
     carregar();
+  };
+  carregar();
+}
+
+/* ---------- Limpeza: 4 equipes ---------- */
+async function viewLimpeza() {
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Limpeza</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
+  app.innerHTML = '<div class="cab"><h1>Limpeza</h1><button class="btn sec" type="button" id="imp">Imprimir</button></div><div id="resp"></div><div id="lista"><p class="vazio">Carregando…</p></div>';
+  $('#imp').onclick = () => window.print();
+  let D = null;
+  const desenhar = () => {
+    const rp = D.responsaveis || [];
+    $('#resp').innerHTML = `<p class="suave"><strong>Responsável:</strong> ${rp.length ? rp.map(esc).join(', ') : 'ainda não definido'}.${D.pode ? ' Você pode editar as equipes.' : ''}</p>`;
+    $('#lista').innerHTML = D.equipes.map(e => `<section class="cartao" style="margin-bottom:1rem"><div class="cab" style="margin:0"><h2>${esc(e.nome)}</h2>${D.pode ? `<button class="btn sec peq" data-id="${e.id}">Editar equipe</button>` : ''}</div>${e.membros.length ? `<ul>${e.membros.map(m => `<li>${esc(m.nome)}</li>`).join('')}</ul>` : '<p class="vazio">Nenhum médium nesta equipe.</p>'}</section>`).join('');
+  };
+  const carregar = async () => {
+    const {data, error} = await sb.rpc('limpeza_dados');
+    if (error) { $('#lista').innerHTML = `<p class="erro" role="alert">${esc(msgErro(error))}</p>`; return; }
+    D = data; desenhar();
+  };
+  const editar = e => {
+    const d = $('#dlg'); d.onclick = null; d.onclose = null;
+    const meus = new Set(e.membros.map(m => String(m.id))), outra = {}, orig = new Map((D.mediuns || []).map(m => [String(m.id), m.id]));
+    D.equipes.forEach(x => { if (x.id !== e.id) x.membros.forEach(m => { outra[String(m.id)] = x.nome; }); });
+    d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">Editar equipe</h2><label for="eq_n">Nome da equipe *</label><input id="eq_n" maxlength="60" value="${esc(e.nome)}" autocomplete="off"><fieldset style="border:1px solid var(--linha);border-radius:6px;margin:.8rem 0;padding:.5rem .8rem"><legend><strong>Médiuns da equipe</strong></legend>${(D.mediuns || []).length ? D.mediuns.map(m => `<label class="chk"><input type="checkbox" class="eq_m" value="${esc(String(m.id))}"${meus.has(String(m.id)) ? ' checked' : ''}>${esc(m.nome)}${outra[String(m.id)] ? ` <span class="suave">(hoje em ${esc(outra[String(m.id)])})</span>` : ''}</label>`).join('') : '<p class="vazio">Nenhum médium cadastrado.</p>'}</fieldset><p class="ajuda">Cada médium fica em uma equipe só: ao marcar quem já está em outra, ele passa para esta.</p><p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar equipe</button></div></form>`;
+    d.showModal(); $('#eq_n').focus();
+    $('#cancelar').onclick = () => d.close();
+    $('#frm').onsubmit = async ev => {
+      ev.preventDefault();
+      const nome = $('#eq_n').value.trim();
+      if (!nome) { $('#erroF').textContent = 'Informe o nome da equipe.'; return; }
+      const ids = [...d.querySelectorAll('.eq_m:checked')].map(i => orig.get(i.value));
+      const btn = $('#salvar'); btn.disabled = true;
+      const {error} = await sb.rpc('limpeza_salvar', {p_equipe: e.id, p_nome: nome, p_membros: ids});
+      if (error) { $('#erroF').textContent = msgErro(error); btn.disabled = false; return; }
+      d.close(); aviso('Equipe salva.'); carregar();
+    };
+  };
+  $('#lista').onclick = ev => {
+    const b = ev.target.closest('button[data-id]'); if (!b) return;
+    const e = D.equipes.find(x => String(x.id) === b.dataset.id); if (e) editar(e);
   };
   carregar();
 }
@@ -2410,7 +2489,7 @@ const CATS_ERVAS = {quente:'Erva quente', morna:'Erva morna', fria:'Erva fria'};
 const CATS_PONTOS = {abertura:'Abertura e encerramento', orixa:'Orixás', pai_velho:'Pretos Velhos', caboclo:'Caboclos', crianca:'Ibejada', baiano:'Baianos', boiadeiro:'Boiadeiros', marinheiro:'Marinheiros', cigano:'Ciganos', exu:'Exus', pombagira:'Pombagiras', exu_mirim:'Exus Mirins', outros:'Outros'};
 const TEXTOS = {
   diario: {tabela:'diario', titulo:'Diário do médium', singular:'anotação', botao:'Nova anotação', ajuda:'Seus lembretes e anotações importantes. Só você consegue ler o que escreve aqui.', vazio:'Nenhuma anotação ainda.', perm:null, ord:['criado_em', false]},
-  material: {tabela:'material_estudo', titulo:'Material de estudo', singular:'material', botao:'Novo material', ajuda:'', vazio:'Nenhum material publicado ainda.', perm:'material', cats:CATS_MAT, ord:['criado_em', false]},
+  material: {tabela:'material_estudo', titulo:'Biblioteca', singular:'material', botao:'Novo material', ajuda:'', vazio:'Nenhum material publicado ainda.', perm:'material', cats:CATS_MAT, ord:['criado_em', false]},
   oracoes: {tabela:'oracoes', titulo:'Orações do médium', singular:'oração', botao:'Nova oração', ajuda:'', vazio:'Nenhuma oração cadastrada ainda.', perm:'oracoes', ord:['titulo', true], acesso:['membro', 'admin', 'consulente'], escrita:['membro'], aprov:true},
   ervas: {tabela:'ervas', titulo:'Ervas', singular:'erva', botao:'Nova erva', ajuda:'Classificação, usos e observações das ervas usadas no terreiro.', vazio:'Nenhuma erva cadastrada ainda.', perm:'__admin', cats:CATS_ERVAS, acesso:['membro', 'admin'], ord:['titulo', true]},
   pontos: {tabela:'pontos_cantados', titulo:'Pontos cantados', singular:'ponto cantado', botao:'Novo ponto', ajuda:'Médiuns cadastram e editam os próprios pontos. Consulentes só visualizam.', vazio:'Nenhum ponto cadastrado ainda.', perm:'__admin', cats:CATS_PONTOS, escrita:['membro'], acesso:['membro', 'admin', 'consulente'], ord:['titulo', true]}
@@ -2481,12 +2560,16 @@ const ROTAS = {
   'admin/questionarios': viewQuestionarios,
   'admin/questionarios/entregas': viewEntregas,
   'admin/situacao': viewSituacao,
-  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/vercomo': viewVerComo, 'ervas': () => viewTextos('ervas'), 'pontos': () => viewTextos('pontos'), 'senha': viewSenha, 'meucadastro': viewMeuCadastro, 'admin/corrente': viewCorrenteAdm, 'corrente': viewCorrente, 'admin/contribuicoes': () => { location.hash = '#/admin/financeiro'; }, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
+  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/vercomo': viewVerComo, 'ervas': () => viewTextos('ervas'), 'pontos': () => viewTextos('pontos'), 'senha': viewSenha, 'meucadastro': viewMeuCadastro, 'admin/corrente': () => { location.hash = '#/corrente'; }, 'corrente': viewCorrente, 'admin/contribuicoes': () => { location.hash = '#/admin/financeiro'; }, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
   'atividades': viewAtividades,
   'diario': () => viewTextos('diario'),
-  'material': () => viewTextos('material'),
+  'biblioteca': () => viewTextos('material'),
+  'material': () => { location.hash = '#/biblioteca'; },
+  'limpeza': viewLimpeza,
   'oracoes': () => viewTextos('oracoes')
 };
+
+const grupoNav = x => /^admin\/(estoque|recepcao|corrente)(\/|$)/.test(x) ? x.split('/').slice(0, 2).join('/') : x.startsWith('admin') ? 'admin/noticias' : x;
 
 async function rotear() {
   const h = (location.hash || '#/').replace(/^#\/?/, '');
@@ -2494,7 +2577,7 @@ async function rotear() {
   const adm = h.startsWith('admin');
   document.querySelectorAll('#nav a').forEach(a => {
     const ah = a.getAttribute('href').replace(/^#\/?/, '');
-    a.toggleAttribute('aria-current', ah === h || (adm && ah.startsWith('admin')));
+    a.toggleAttribute('aria-current', grupoNav(ah) === grupoNav(h));
   });
   const mNot = h.match(/^noticia\/(\d+)$/);
   const f = mNot ? () => viewNoticia(Number(mNot[1])) : ROTAS[h];
