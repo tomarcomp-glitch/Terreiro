@@ -469,11 +469,12 @@ function msgErro(e) {
   if (/rate limit/i.test(m)) return 'Muitas tentativas. Aguarde alguns minutos e tente de novo.';
   if (e && e.code === '23503') return 'Este registro está em uso em outra tela e não pode ser excluído.';
   if (/row-level security|permission denied/i.test(m)) return 'Você não tem permissão para esta ação.';
+  if (/permissoes_validas|pontos_categoria_valida/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes8.sql no Supabase (libera as novas permissões e categorias).';
   if (e && e.code === '23514') return /presencas/i.test(e.message || '') ? 'Informe o motivo de não ir.' : 'O banco recusou um valor deste cadastro: ' + String(e.message || '').replace(/^new row for relation /, '') + '.';
   if (e && e.code === '23505') return /curtidas/.test(m) ? 'Você já curtiu esta notícia.' : /usuario_id/.test(m) ? 'Esta conta do site já está vinculada a outro cadastro.' : 'Este registro já existe.';
   if (/exceeded the maximum allowed size|too large/i.test(m)) return 'A imagem é grande demais.';
   if (/Failed to fetch|NetworkError/i.test(m)) return 'Sem conexão com o servidor. Verifique a internet.';
-  if (/corrente_travada|limpeza_|'resposta'|respondida_em/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes8.sql no Supabase.';
+  if (/corrente_travada|limpeza_|'resposta'|respondida_em|ervas_quem_colhe|ervas_colher|'grupo'|'alvo'/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes8.sql no Supabase.';
   if (/contribuicoes_info/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes3.sql no Supabase.';
   if (/admin_negar_cadastro|meu_cadastro_id|mensagens/i.test(m) && /schema cache|does not exist|Could not find/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes.sql no Supabase.';
   if (/lista_incorporantes|medium_id/i.test(m)) return 'Falta rodar o SQL terreiro_ajustes2.sql no Supabase.';
@@ -2327,6 +2328,93 @@ async function viewCorrenteAdm() {
   carregar();
 }
 
+/* ---------- Ervas: glossário, orixás e entidades ---------- */
+const ERVAS_GRUPOS = {glossario: 'Glossário', orixa: 'Ervas de orixá', entidade: 'Ervas para entidades'};
+const ERVAS_ORIXAS = ['Oxalá', 'Logunã/Oyá', 'Oxumaré', 'Oxum', 'Oxóssi', 'Obá', 'Xangô', 'Oroyna', 'Ogum', 'Iansã', 'Obaluaiê', 'Nanã', 'Iemanjá', 'Omolu'];
+const ERVAS_ENTIDADES = ['Pai Velho', 'Caboclo', 'Criança', 'Baiano', 'Boiadeiro', 'Marinheiro', 'Cigano', 'Exu', 'Pombagira', 'Exu Mirim'];
+const ervasAlvos = g => g === 'orixa' ? ERVAS_ORIXAS : g === 'entidade' ? ERVAS_ENTIDADES : [];
+
+async function viewErvas() {
+  if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Ervas</h1><p>Esta área é para médiuns. Entre com a sua conta ou peça ao administrador para liberar o acesso.</p></div>'; return; }
+  const gerencia = pode('ervas'), cad = perfil.papel === 'membro' ? meuCad() : null, grupoDe = r => r.grupo || 'glossario';
+  let linhas = [], colh = [], fg = '', fa = '', fc = '';
+  const opt = (obj, todos) => `<option value="">${todos}</option>` + Object.entries(obj).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+  app.innerHTML = `<div class="cab"><h1>Ervas</h1>${gerencia ? '<button class="btn" id="novo">Nova erva</button>' : ''}</div><p class="suave">Classificação, usos e observações das ervas usadas no terreiro.${cad ? ' Marque "Posso colher" nas ervas que você sabe colher.' : ''}</p>
+    <div class="filtros"><select id="fg" aria-label="Grupo">${opt(ERVAS_GRUPOS, 'Todos os grupos')}</select><select id="fa" aria-label="Orixá ou entidade" hidden></select><select id="fc" aria-label="Temperatura">${opt(CATS_ERVAS, 'Quentes, mornas e frias')}</select></div><p class="erro" id="nota" role="alert"></p><div id="lista"><p class="vazio">Carregando…</p></div>`;
+  const desenhar = () => {
+    const rs = linhas.filter(r => (!fg || grupoDe(r) === fg) && (!fa || r.alvo === fa) && (!fc || r.categoria === fc));
+    $('#lista').innerHTML = rs.length ? rs.map(r => {
+      const quem = colh.filter(x => String(x.erva_id) === String(r.id)), eu = !!cad && quem.some(x => String(x.membro_id) === String(cad));
+      return `<article class="cartao" style="margin-bottom:1rem"><div class="cab"><div><h2>${esc(r.titulo)}</h2><span class="suave">${esc(ERVAS_GRUPOS[grupoDe(r)])}${r.alvo ? ' · ' + esc(r.alvo) : ''} · ${esc(CATS_ERVAS[r.categoria] || '')} · ${dataHoraBR(r.criado_em)}</span></div>${gerencia ? `<div><button class="btn sec" data-a="e" data-id="${r.id}">Editar</button> <button class="btn sec" data-a="x" data-id="${r.id}">Excluir</button></div>` : ''}</div><p>${texto(r.texto)}</p>${cad ? `<label class="chk"><input type="checkbox" data-colher="${r.id}"${eu ? ' checked' : ''}>Posso colher</label>` : ''}<p class="suave">${quem.length ? 'Quem pode colher: ' + quem.map(x => esc(x.nome)).join(', ') : 'Ninguém marcou que pode colher.'}</p></article>`;
+    }).join('') : '<p class="vazio">Nenhuma erva encontrada.</p>';
+  };
+  const carregar = async () => {
+    const [e, c] = await Promise.all([sb.from('ervas').select('*').order('titulo', {ascending: true}), sb.rpc('ervas_quem_colhe')]);
+    if (e.error) { $('#lista').innerHTML = `<p class="erro" role="alert">${esc(msgErro(e.error))}</p>`; return; }
+    linhas = e.data || []; colh = c.error || !Array.isArray(c.data) ? [] : c.data;
+    $('#nota').textContent = c.error ? msgErro(c.error) : '';
+    desenhar();
+  };
+  $('#fg').onchange = () => {
+    fg = $('#fg').value; fa = '';
+    const l = ervasAlvos(fg), s = $('#fa');
+    s.hidden = !l.length;
+    s.innerHTML = `<option value="">${fg === 'orixa' ? 'Todos os orixás' : 'Todas as entidades'}</option>` + l.map(x => `<option>${esc(x)}</option>`).join('');
+    desenhar();
+  };
+  $('#fa').onchange = () => { fa = $('#fa').value; desenhar(); };
+  $('#fc').onchange = () => { fc = $('#fc').value; desenhar(); };
+  const abrir = r => {
+    const d = $('#dlg'); d.onclick = null; d.onclose = null;
+    const g0 = r ? grupoDe(r) : 'glossario';
+    d.innerHTML = `<form id="frm" novalidate><h2 id="dlgT">${r ? 'Editar' : 'Nova'} erva</h2>
+      <label for="e_g">Grupo *</label><select id="e_g">${Object.entries(ERVAS_GRUPOS).map(([k, v]) => `<option value="${k}"${g0 === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
+      <div id="e_aw" hidden><label for="e_a">Orixá ou entidade *</label><select id="e_a"></select></div>
+      <label for="e_c">Temperatura *</label><select id="e_c">${Object.entries(CATS_ERVAS).map(([k, v]) => `<option value="${k}"${r && r.categoria === k ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
+      <label for="e_t">Título *</label><input id="e_t" maxlength="150" value="${esc(r ? r.titulo : '')}">
+      <label for="e_x">Texto *</label><textarea id="e_x" rows="10">${esc(r ? r.texto : '')}</textarea>
+      <p class="erro" id="erroF" role="alert"></p><div class="rodape"><button type="button" class="btn sec" id="cancelar">Cancelar</button><button class="btn" id="salvar">Salvar</button></div></form>`;
+    const atualizar = () => {
+      const l = ervasAlvos($('#e_g').value), a = $('#e_a'), atual = a.value || (r && r.alvo) || '';
+      $('#e_aw').hidden = !l.length;
+      a.innerHTML = '<option value="">Escolha…</option>' + l.map(x => `<option${x === atual ? ' selected' : ''}>${esc(x)}</option>`).join('');
+    };
+    $('#e_g').onchange = () => { $('#e_a').value = ''; atualizar(); };
+    atualizar();
+    d.showModal(); $('#e_t').focus();
+    $('#cancelar').onclick = () => d.close();
+    $('#frm').onsubmit = async ev => {
+      ev.preventDefault();
+      const g = $('#e_g').value, alvo = $('#e_a').value;
+      const obj = {titulo: $('#e_t').value.trim(), texto: $('#e_x').value.trim(), categoria: $('#e_c').value};
+      if (!obj.titulo || !obj.texto) { $('#erroF').textContent = 'Preencha o título e o texto.'; return; }
+      if (g !== 'glossario' && !alvo) { $('#erroF').textContent = g === 'orixa' ? 'Escolha o orixá.' : 'Escolha a entidade.'; return; }
+      if (g !== 'glossario' || (r && r.grupo)) { obj.grupo = g; obj.alvo = g === 'glossario' ? null : alvo; }
+      const btn = $('#salvar'); btn.disabled = true;
+      const res = r ? await sb.from('ervas').update(obj).eq('id', r.id).select() : await sb.from('ervas').insert(obj).select();
+      if (res.error || !res.data || !res.data.length) { $('#erroF').textContent = res.error ? msgErro(res.error) : 'Não foi possível salvar.'; btn.disabled = false; return; }
+      d.close(); aviso('Salvo.'); carregar();
+    };
+  };
+  const nv = $('#novo'); if (nv) nv.onclick = () => abrir(null);
+  $('#lista').onclick = async ev => {
+    const b = ev.target.closest('button[data-a]'); if (!b) return;
+    const r = linhas.find(x => String(x.id) === b.dataset.id); if (!r) return;
+    if (b.dataset.a === 'e') { abrir(r); return; }
+    if (!(await confirmar(`Excluir "${r.titulo}"? Esta ação não pode ser desfeita.`, 'Excluir'))) return;
+    const {data, error} = await sb.from('ervas').delete().eq('id', r.id).select();
+    if (error || !data || !data.length) { aviso(error ? msgErro(error) : 'Não foi possível excluir.', true); return; }
+    aviso('Excluído.'); carregar();
+  };
+  $('#lista').onchange = async ev => {
+    const i = ev.target.closest('input[data-colher]'); if (!i) return;
+    const {error} = await sb.rpc('ervas_colher', {p_erva: String(i.dataset.colher), p_pode: i.checked});
+    if (error) { i.checked = !i.checked; aviso(msgErro(error), true); return; }
+    aviso(i.checked ? 'Marcado: você pode colher esta erva.' : 'Desmarcado.'); carregar();
+  };
+  carregar();
+}
+
 /* ---------- Limpeza: 4 equipes ---------- */
 async function viewLimpeza() {
   if (!sessao || !perfil || !['membro', 'admin'].includes(perfil.papel)) { app.innerHTML = '<div class="cartao estreito"><h1>Limpeza</h1><p>Esta área é para médiuns. Entre com a sua conta.</p></div>'; return; }
@@ -2486,7 +2574,7 @@ async function blocoConsulentes(box, giras) {
 
 const CATS_MAT = {iniciacao:'Iniciação', complementar:'Complementar', gira_desenvolvimento:'Gira de desenvolvimento', biblioteca:'Biblioteca mediúnica'};
 const CATS_ERVAS = {quente:'Erva quente', morna:'Erva morna', fria:'Erva fria'};
-const CATS_PONTOS = {abertura:'Abertura e encerramento', orixa:'Orixás', pai_velho:'Pretos Velhos', caboclo:'Caboclos', crianca:'Ibejada', baiano:'Baianos', boiadeiro:'Boiadeiros', marinheiro:'Marinheiros', cigano:'Ciganos', exu:'Exus', pombagira:'Pombagiras', exu_mirim:'Exus Mirins', outros:'Outros'};
+const CATS_PONTOS = {abertura:'Abertura e encerramento', orixa:'Orixás', pai_velho:'Pretos Velhos', caboclo:'Caboclos', crianca:'Ibejada', baiano:'Baianos', boiadeiro:'Boiadeiros', marinheiro:'Marinheiros', cigano:'Ciganos', exu:'Exus', pombagira:'Pombagiras', exu_mirim:'Exus Mirins', pombagira_mirim:'Pombagiras Mirins', malandro:'Malandros', outros:'Outros'};
 const TEXTOS = {
   diario: {tabela:'diario', titulo:'Diário do médium', singular:'anotação', botao:'Nova anotação', ajuda:'Seus lembretes e anotações importantes. Só você consegue ler o que escreve aqui.', vazio:'Nenhuma anotação ainda.', perm:null, ord:['criado_em', false]},
   material: {tabela:'material_estudo', titulo:'Biblioteca', singular:'material', botao:'Novo material', ajuda:'', vazio:'Nenhum material publicado ainda.', perm:'material', cats:CATS_MAT, ord:['criado_em', false]},
@@ -2560,7 +2648,7 @@ const ROTAS = {
   'admin/questionarios': viewQuestionarios,
   'admin/questionarios/entregas': viewEntregas,
   'admin/situacao': viewSituacao,
-  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/vercomo': viewVerComo, 'ervas': () => viewTextos('ervas'), 'pontos': () => viewTextos('pontos'), 'senha': viewSenha, 'meucadastro': viewMeuCadastro, 'admin/corrente': () => { location.hash = '#/corrente'; }, 'corrente': viewCorrente, 'admin/contribuicoes': () => { location.hash = '#/admin/financeiro'; }, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
+  'admin/mensagens': viewMensagensAdm, 'admin/recepcao': viewRecepcao, 'admin/vercomo': viewVerComo, 'ervas': viewErvas, 'pontos': () => viewTextos('pontos'), 'senha': viewSenha, 'meucadastro': viewMeuCadastro, 'admin/corrente': () => { location.hash = '#/corrente'; }, 'corrente': viewCorrente, 'admin/contribuicoes': () => { location.hash = '#/admin/financeiro'; }, 'lua': viewLua, 'contribuicao': viewContribuicao, 'mensagens': viewMensagens,
   'atividades': viewAtividades,
   'diario': () => viewTextos('diario'),
   'biblioteca': () => viewTextos('material'),
